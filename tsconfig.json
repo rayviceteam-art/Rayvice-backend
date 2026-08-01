@@ -4,7 +4,8 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "commonjs",
-    "moduleResolution": "bundler",
+    "moduleResolution": "node16",
+    "types": ["node"],
 
     /* Output */
     "outDir": "./dist",
