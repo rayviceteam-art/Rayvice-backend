@@ -1,20 +1,16 @@
-cat << 'EOF' > tsconfig.json
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "rootDir": "./src",
+    "module": "CommonJS",
+    "moduleResolution": "node",
     "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": false,
+    "noImplicitAny": false,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
-    "paths": {
-      "*": ["./src/*"]
-    }
+    "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
-EOF
