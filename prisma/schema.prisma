@@ -1,0 +1,243 @@
+// =============================================================================
+// Rayvice — Prisma Schema
+// Module 1: Authentication + Organization + Tenant Foundation
+//
+// Source of truth: BACKEND-02 (Database Schema), BACKEND-03 (Auth & Business
+// Logic), GLOBAL-RULES (Trial Policy & Multi-Tenant Rules).
+//
+// Only entities required for Module 1 are defined here. Entities referenced
+// by future modules (Customers, Appointments, AI Conversations, Billing,
+// etc.) are intentionally NOT created — see BACKEND-02 §16 Final Development
+// Rule: "No developer or AI coding agent may create ... database tables
+// without following this document."
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+/// Three primary roles defined in BACKEND-03 §3.
+enum UserRole {
+  OWNER
+  OFFICE_MANAGER
+  TECHNICIAN
+}
+
+/// Lifecycle status of a user account within its business.
+enum UserStatus {
+  INVITED // Created by an Owner, has not yet set a password
+  ACTIVE
+  SUSPENDED
+}
+
+/// Business (tenant) lifecycle status per GLOBAL-RULES §2-3.
+enum BusinessStatus {
+  TRIALING
+  ACTIVE // Has an active paid subscription (Module 2+/Billing sets this)
+  READ_ONLY // Trial expired, no subscription purchased
+  SUSPENDED
+}
+
+/// Categorized audit event types for consistent, queryable audit logs.
+enum AuditAction {
+  BUSINESS_REGISTERED
+  USER_INVITED
+  USER_INVITE_ACCEPTED
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  TOKEN_REFRESHED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  PASSWORD_CHANGED
+  EMAIL_VERIFICATION_SENT
+  EMAIL_VERIFIED
+  USER_SUSPENDED
+  USER_REACTIVATED
+}
+
+// -----------------------------------------------------------------------------
+// Business — the tenant. Every other record in the system is scoped to one.
+// (BACKEND-02 §6, GLOBAL-RULES §7 Multi-Tenant Rules)
+// -----------------------------------------------------------------------------
+model Business {
+  id    String @id @default(uuid())
+  name  String
+  email String @unique // Primary business contact email; used for anti-abuse checks
+
+  phone    String?
+  industry String?
+
+  status BusinessStatus @default(TRIALING)
+
+  // --- Trial Policy (GLOBAL-RULES §2) ---
+  trialStartedAt DateTime  @default(now())
+  trialEndsAt    DateTime
+  hasUsedTrial   Boolean   @default(true) // Set at registration; prevents re-issuing a trial
+
+  // Standard metadata fields (BACKEND-02 §5)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  users     User[]
+  auditLogs AuditLog[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("businesses")
+}
+
+// -----------------------------------------------------------------------------
+// User — belongs to exactly one Business (tenant isolation).
+// (BACKEND-03 §3 Roles, GLOBAL-RULES §7)
+// -----------------------------------------------------------------------------
+model User {
+  id         String @id @default(uuid())
+  businessId String
+
+  email        String @unique
+  passwordHash String
+
+  firstName String
+  lastName  String
+
+  role   UserRole
+  status UserStatus @default(ACTIVE)
+
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  failedLoginAttempts Int    @default(0)
+  lockedUntil     DateTime?
+
+  // Standard metadata fields (BACKEND-02 §5)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  refreshTokens           RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  invitationTokens        InvitationToken[]
+  auditLogs               AuditLog[]
+
+  @@index([businessId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+// -----------------------------------------------------------------------------
+// RefreshToken — supports JWT refresh-token session management
+// (BACKEND-03 §2 Refresh Token Support, §5 Session Management)
+// -----------------------------------------------------------------------------
+model RefreshToken {
+  id        String @id @default(uuid())
+  userId    String
+  tokenHash String @unique // SHA-256 hash of the raw refresh token; raw value never stored
+
+  userAgent String?
+  ipAddress String?
+
+  expiresAt DateTime
+  revokedAt DateTime?
+  replacedByTokenHash String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// EmailVerificationToken (BACKEND-03 §2 Email Verification)
+// -----------------------------------------------------------------------------
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// PasswordResetToken (BACKEND-03 §2 Password Reset)
+// -----------------------------------------------------------------------------
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// InvitationToken — lets an Owner invite Office Managers / Technicians into
+// their Business (BACKEND-03 §3 Team Management is an Owner permission).
+// -----------------------------------------------------------------------------
+model InvitationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("invitation_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// AuditLog — immutable record of security & business events.
+// (BACKEND-02 §10, BACKEND-03 §13: "Audit logs must be immutable")
+// No update/delete operations are ever exposed for this model in application code.
+// -----------------------------------------------------------------------------
+model AuditLog {
+  id         String   @id @default(uuid())
+  businessId String? // Nullable: some events (e.g. failed login with unknown email) precede tenant resolution
+  userId     String?
+
+  action    AuditAction
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
