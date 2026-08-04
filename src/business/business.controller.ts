@@ -37,11 +37,21 @@ export const listTeamMembers = asyncHandler(async (req: Request, res: Response) 
 });
 
 export const suspendTeamMember = asyncHandler(async (req: Request, res: Response) => {
-  await businessService.suspendTeamMember(req.user!.businessId, req.params.userId, req.user!.id, requestMeta(req));
+  await businessService.suspendTeamMember(
+    req.user!.businessId,
+    req.params.userId as string,
+    req.user!.id,
+    requestMeta(req)
+  );
   sendSuccess(res, 200, 'Team member suspended.', {});
 });
 
 export const reactivateTeamMember = asyncHandler(async (req: Request, res: Response) => {
-  await businessService.reactivateTeamMember(req.user!.businessId, req.params.userId, req.user!.id, requestMeta(req));
+  await businessService.reactivateTeamMember(
+    req.user!.businessId,
+    req.params.userId as string,
+    req.user!.id,
+    requestMeta(req)
+  );
   sendSuccess(res, 200, 'Team member reactivated.', {});
 });
