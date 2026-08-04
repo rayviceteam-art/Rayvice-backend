@@ -1,8 +1,8 @@
 import type { Server } from 'http';
 
 import { createApp } from './app';
-import { env } from './config/env.config';
-import { logger } from './utils/logger';
+import { env } from './config/env';
+import { logger } from './config/logger';
 
 const app = createApp();
 
