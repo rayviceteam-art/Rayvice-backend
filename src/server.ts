@@ -1,41 +1,48 @@
+import type { Server } from 'http';
+
 import { createApp } from './app';
-import { env } from './config/env';
-import { logger } from './config/logger';
-import { connectDatabase, disconnectDatabase } from './config/database';
+import { env } from './config/env.config';
+import { logger } from './utils/logger';
 
-async function bootstrap(): Promise<void> {
-  await connectDatabase();
+const app = createApp();
 
-  const app = createApp();
+const server: Server = app.listen(env.PORT, () => {
+  logger.info(`Rayvice API listening on port ${env.PORT}`, {
+    environment: env.NODE_ENV,
+    url: env.APP_URL,
+  });
+});
 
-  const server = app.listen(env.PORT, () => {
-    logger.info(`Rayvice backend listening on port ${env.PORT} [${env.NODE_ENV}]`);
+function shutdown(signal: string): void {
+  logger.info(`Received ${signal}, shutting down gracefully...`);
+
+  server.close((err) => {
+    if (err) {
+      logger.error('Error during server shutdown', { error: err.message });
+      process.exit(1);
+    }
+
+    logger.info('Server closed. Goodbye.');
+    process.exit(0);
   });
 
-  const shutdown = async (signal: string): Promise<void> => {
-    logger.info(`Received ${signal}. Shutting down gracefully...`);
-    server.close(async () => {
-      await disconnectDatabase();
-      process.exit(0);
-    });
-
-    // Force-exit if shutdown hangs (MASTER-06 §17 Reliability — zero data loss during deployments).
-    setTimeout(() => process.exit(1), 10_000).unref();
-  };
-
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-
-  process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled promise rejection', { reason });
-  });
-  process.on('uncaughtException', (error) => {
-    logger.error('Uncaught exception', { error });
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
     process.exit(1);
-  });
+  }, 10_000).unref();
 }
 
-bootstrap().catch((error) => {
-  logger.error('Failed to bootstrap application', { error });
-  process.exit(1);
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+  });
+  shutdown('unhandledRejection');
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', { error: error.message, stack: error.stack });
+  shutdown('uncaughtException');
 });
