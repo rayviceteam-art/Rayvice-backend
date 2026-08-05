@@ -7,7 +7,7 @@ function baseCookieOptions(): CookieOptions {
   return {
     httpOnly: true,
     secure: isProduction, // HTTPS-only in production, per MASTER-06 §10 "HTTPS everywhere"
-    sameSite: 'lax',
+    sameSite: 'none', // required: frontend (Vercel) and backend (Render) are different domains
     path: '/api/v1/auth',
   };
 }
