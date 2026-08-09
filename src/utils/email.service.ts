@@ -1,4 +1,4 @@
-import nodemailer, { Transporter } from 'nodemailer';
+import { Resend } from 'resend';
 import { env, isProduction } from '../config/env';
 import { logger } from '../config/logger';
 
@@ -9,34 +9,28 @@ interface SendEmailInput {
   text: string;
 }
 
-let transporter: Transporter | null = null;
+// Resend client initializer
+let resendClient: Resend | null = null;
 
-function getTransporter(): Transporter | null {
-  if (!env.SMTP_HOST) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined,
-    });
+function getResendClient(): Resend | null {
+  const apiKey = process.env.RESEND_API_KEY || env.SMTP_PASSWORD;
+  if (!apiKey) return null;
+  
+  if (!resendClient) {
+    resendClient = new Resend(apiKey);
   }
-  return transporter;
+  return resendClient;
 }
 
 /**
- * Sends a transactional email via the configured SMTP provider.
+ * Sends a transactional email via Resend API SDK.
  *
- * BACKEND-01 §3 lists an "Email Provider Key" as a required environment
- * variable; this service reads that configuration and delivers real mail
- * when SMTP_HOST is set. When no SMTP provider is configured (e.g. local
- * development without credentials), the message is written to the
- * application log instead of being silently dropped, so verification /
- * reset / invite flows remain fully testable end-to-end without an
- * external dependency.
+ * Replaces traditional SMTP to prevent Render outbound port blocking and timeouts.
+ * When no API key is configured (e.g. local development), the message is written
+ * to the application log instead of being silently dropped.
  */
 export async function sendEmail(input: SendEmailInput): Promise<void> {
-  const client = getTransporter();
+  const client = getResendClient();
 
   if (!client) {
     if (isProduction) {
@@ -51,13 +45,18 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
   }
 
   try {
-    await client.sendMail({
-      from: env.EMAIL_FROM,
-      to: input.to,
+    // Fallback to official test sender if EMAIL_FROM is missing or unverified
+    const sender = env.EMAIL_FROM || 'Rayvice <onboarding@resend.dev>';
+
+    await client.emails.send({
+      from: sender,
+      to: [input.to],
       subject: input.subject,
       html: input.html,
       text: input.text,
     });
+
+    logger.info('Email sent successfully', { to: input.to, subject: input.subject });
   } catch (error) {
     logger.error('Failed to send email', { to: input.to, subject: input.subject, error });
     throw error;
