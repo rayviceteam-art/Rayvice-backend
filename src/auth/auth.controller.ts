@@ -1,77 +1,59 @@
-import { Request, Response } from 'express';
-import { asyncHandler } from '../utils/asyncHandler';
-import { sendSuccess } from '../utils/ApiResponse';
-import { ApiError } from '../utils/ApiError';
-import { REFRESH_TOKEN_COOKIE, clearRefreshTokenCookie, setRefreshTokenCookie } from '../utils/cookies';
-import * as authService from './auth.service';
-import { RequestMeta } from './auth.service';
+import { Resend } from 'resend';
+import { env, isProduction } from '../config/env';
+import { logger } from '../config/logger';
 
-function requestMeta(req: Request): RequestMeta {
-  return {
-    ipAddress: req.ip ?? null,
-    userAgent: req.headers['user-agent'] ?? null,
-  };
+interface SendEmailInput {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
 }
 
-export const register = asyncHandler(async (req: Request, res: Response) => {
-  const { business, user, tokens } = await authService.registerBusiness(req.body, requestMeta(req));
-  setRefreshTokenCookie(res, tokens.refreshToken, tokens.refreshTokenExpiresAt);
-  sendSuccess(res, 201, 'Business registered successfully. A verification email has been sent.', {
-    business,
-    user,
-    accessToken: tokens.accessToken,
-  });
-});
+let resendClient: Resend | null = null;
 
-export const login = asyncHandler(async (req: Request, res: Response) => {
-  const { user, tokens } = await authService.login(req.body, requestMeta(req));
-  setRefreshTokenCookie(res, tokens.refreshToken, tokens.refreshTokenExpiresAt);
-  sendSuccess(res, 200, 'Login successful.', { user, accessToken: tokens.accessToken });
-});
-
-export const refresh = asyncHandler(async (req: Request, res: Response) => {
-  const rawRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
-  if (!rawRefreshToken) {
-    throw ApiError.unauthorized('No refresh token provided.', 'MISSING_REFRESH_TOKEN');
+function getResendClient(): Resend | null {
+  const apiKey = process.env.RESEND_API_KEY || env.SMTP_PASSWORD;
+  if (!apiKey) return null;
+  if (!resendClient) {
+    resendClient = new Resend(apiKey);
   }
-  const { tokens } = await authService.refreshSession(rawRefreshToken, requestMeta(req));
-  setRefreshTokenCookie(res, tokens.refreshToken, tokens.refreshTokenExpiresAt);
-  sendSuccess(res, 200, 'Token refreshed successfully.', { accessToken: tokens.accessToken });
-});
+  return resendClient;
+}
 
-export const logout = asyncHandler(async (req: Request, res: Response) => {
-  const rawRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
-  await authService.logout(rawRefreshToken, requestMeta(req));
-  clearRefreshTokenCookie(res);
-  sendSuccess(res, 200, 'Logged out successfully.', {});
-});
+export async function sendEmail(input: SendEmailInput): Promise<void> {
+  const client = getResendClient();
 
-export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
-  await authService.verifyEmail(req.body);
-  sendSuccess(res, 200, 'Email verified successfully.', {});
-});
+  if (!client) {
+    if (isProduction) {
+      logger.error('Resend API key is not configured; email was not sent.', { to: input.to, subject: input.subject });
+      return;
+    }
+    logger.info('Email (dev mode — API key not configured, logging instead of sending)', {
+      to: input.to,
+      subject: input.subject,
+    });
+    return;
+  }
 
-export const resendVerification = asyncHandler(async (req: Request, res: Response) => {
-  await authService.resendVerificationEmail(req.body);
-  sendSuccess(res, 200, 'If an account with that email exists and is unverified, a verification email has been sent.', {});
-});
+  try {
+    const sender = env.EMAIL_FROM || 'Rayvice <onboarding@resend.dev>';
 
-export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
-  await authService.forgotPassword(req.body, requestMeta(req));
-  sendSuccess(res, 200, 'If an account with that email exists, a password reset link has been sent.', {});
-});
+    const response = await client.emails.send({
+      from: sender,
+      to: [input.to],
+      subject: input.subject,
+      html: input.html,
+      text: input.text || '',
+    });
 
-export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
-  await authService.resetPassword(req.body, requestMeta(req));
-  sendSuccess(res, 200, 'Password has been reset successfully. Please log in with your new password.', {});
-});
+    if (response.error) {
+      logger.error('Resend API error:', { error: response.error, to: input.to });
+      throw new Error(response.error.message);
+    }
 
-export const changePassword = asyncHandler(async (req: Request, res: Response) => {
-  await authService.changePassword(req.user!.id, req.body, requestMeta(req));
-  sendSuccess(res, 200, 'Password changed successfully.', {});
-});
-
-export const getMe = asyncHandler(async (req: Request, res: Response) => {
-  const profile = await authService.getCurrentUserProfile(req.user!.id);
-  sendSuccess(res, 200, 'Current user profile retrieved.', profile);
-});
+    logger.info('Email sent successfully via Resend API', { to: input.to, subject: input.subject, id: response.data?.id });
+  } catch (error) {
+    logger.error('Failed to send email', { to: input.to, subject: input.subject, error });
+    throw error;
+  }
+}
