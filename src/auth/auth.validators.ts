@@ -75,4 +75,17 @@ export const changePasswordSchema = z.object({
 });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>['body'];
 
+export const googleAuthSchema = z.object({
+  body: z
+    .object({
+      credential: z.string().optional(),
+      idToken: z.string().optional(),
+      accessToken: z.string().optional(),
+    })
+    .refine((data) => data.credential || data.idToken || data.accessToken, {
+      message: 'Google credential, idToken, or accessToken is required.',
+    }),
+});
+export type GoogleAuthInput = z.infer<typeof googleAuthSchema>['body'];
+
 export { passwordSchema, emailSchema };

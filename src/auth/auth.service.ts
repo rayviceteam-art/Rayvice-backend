@@ -17,6 +17,7 @@ import {
   ResetPasswordInput,
   VerifyEmailInput,
   ChangePasswordInput,
+  GoogleAuthInput,
 } from './auth.validators';
 
 // BACKEND-03 §14 — "Protect against brute-force attacks."
@@ -469,4 +470,169 @@ export async function getCurrentUserProfile(userId: string) {
   }
 
   return user;
+}
+
+export interface GoogleUserInfo {
+  email: string;
+  email_verified?: boolean;
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+  picture?: string;
+  sub?: string;
+}
+
+async function verifyGoogleToken(input: GoogleAuthInput): Promise<GoogleUserInfo> {
+  const token = input.credential || input.idToken || input.accessToken;
+  if (!token) {
+    throw ApiError.badRequest('Google credential, idToken, or accessToken is required.', 'MISSING_GOOGLE_TOKEN');
+  }
+
+  try {
+    const url = input.credential || input.idToken
+      ? `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`
+      : `https://www.googleapis.com/oauth2/v3/userinfo`;
+
+    const headers: Record<string, string> = {};
+    if (input.accessToken) {
+      headers['Authorization'] = `Bearer ${input.accessToken}`;
+    }
+
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`Google verification responded with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as GoogleUserInfo;
+    if (!data.email) {
+      throw new Error('Google token did not contain an email address.');
+    }
+
+    return {
+      email: data.email.toLowerCase().trim(),
+      email_verified: data.email_verified === true || (data as Record<string, unknown>).email_verified === 'true',
+      given_name: data.given_name || data.name?.split(' ')[0] || 'User',
+      family_name: data.family_name || data.name?.split(' ').slice(1).join(' ') || '',
+      picture: data.picture,
+      sub: data.sub,
+    };
+  } catch (error) {
+    logger.error('Google token verification failed', { error });
+    throw ApiError.unauthorized('Failed to authenticate with Google. Invalid or expired token.', 'GOOGLE_AUTH_FAILED');
+  }
+}
+
+export async function googleAuth(input: GoogleAuthInput, meta: RequestMeta) {
+  const googleUser = await verifyGoogleToken(input);
+
+  const existingUser = await prisma.user.findUnique({
+    where: { email: googleUser.email },
+    include: { business: true },
+  });
+
+  let user: any;
+  let business: any;
+
+  if (existingUser) {
+    if (existingUser.deletedAt || existingUser.business.deletedAt) {
+      throw ApiError.unauthorized('Account has been deactivated.', 'ACCOUNT_DEACTIVATED');
+    }
+
+    if (existingUser.status !== 'ACTIVE') {
+      throw ApiError.forbidden('Your account is not active. Contact your business owner.', 'ACCOUNT_INACTIVE');
+    }
+
+    user = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        lastLoginAt: new Date(),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        emailVerifiedAt: existingUser.emailVerifiedAt ?? (googleUser.email_verified ? new Date() : null),
+      },
+      include: { business: true },
+    });
+
+    business = user.business;
+
+    await recordAuditEvent({
+      action: 'LOGIN_SUCCESS',
+      businessId: business.id,
+      userId: user.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { authProvider: 'google' },
+    });
+  } else {
+    // New registration via Google Sign-In
+    const trialEndsAt = computeTrialEndDate();
+    const { rawToken } = generateOpaqueToken();
+    const passwordHash = await hashPassword(rawToken);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const createdBusiness = await tx.business.create({
+        data: {
+          name: `${googleUser.given_name}'s Business`,
+          email: googleUser.email,
+          status: 'TRIALING',
+          trialEndsAt,
+          hasUsedTrial: true,
+        },
+      });
+
+      const createdUser = await tx.user.create({
+        data: {
+          businessId: createdBusiness.id,
+          email: googleUser.email,
+          passwordHash,
+          firstName: googleUser.given_name || 'User',
+          lastName: googleUser.family_name || '',
+          role: 'OWNER',
+          status: 'ACTIVE',
+          emailVerifiedAt: new Date(),
+          lastLoginAt: new Date(),
+        },
+      });
+
+      return { business: createdBusiness, user: createdUser };
+    });
+
+    business = result.business;
+    user = result.user;
+
+    await recordAuditEvent({
+      action: 'BUSINESS_REGISTERED',
+      businessId: business.id,
+      userId: user.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { authProvider: 'google' },
+    });
+
+    await recordAuditEvent({
+      action: 'LOGIN_SUCCESS',
+      businessId: business.id,
+      userId: user.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { authProvider: 'google' },
+    });
+  }
+
+  const tokens = await issueTokenPair(user.id, business.id, user.role, meta);
+
+  const sanitizedUser = {
+    id: user.id,
+    businessId: user.businessId,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    role: user.role,
+    status: user.status,
+    emailVerifiedAt: user.emailVerifiedAt,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
+  };
+
+  return { business, user: sanitizedUser, tokens };
 }

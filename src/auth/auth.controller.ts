@@ -29,6 +29,16 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, 200, 'Login successful.', { user, accessToken: tokens.accessToken });
 });
 
+export const googleAuth = asyncHandler(async (req: Request, res: Response) => {
+  const { business, user, tokens } = await authService.googleAuth(req.body, requestMeta(req));
+  setRefreshTokenCookie(res, tokens.refreshToken, tokens.refreshTokenExpiresAt);
+  sendSuccess(res, 200, 'Authenticated with Google successfully.', {
+    business,
+    user,
+    accessToken: tokens.accessToken,
+  });
+});
+
 export const refresh = asyncHandler(async (req: Request, res: Response) => {
   const rawRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
   if (!rawRefreshToken) {
