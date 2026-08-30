@@ -510,7 +510,7 @@ async function verifyGoogleToken(input: GoogleAuthInput): Promise<GoogleUserInfo
 
     return {
       email: data.email.toLowerCase().trim(),
-      email_verified: data.email_verified === true || (data as Record<string, unknown>).email_verified === 'true',
+      email_verified: data.email_verified === true || String((data as unknown as Record<string, unknown>).email_verified) === 'true',
       given_name: data.given_name || data.name?.split(' ')[0] || 'User',
       family_name: data.family_name || data.name?.split(' ').slice(1).join(' ') || '',
       picture: data.picture,

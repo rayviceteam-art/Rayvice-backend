@@ -8,11 +8,11 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "prisma generate && tsc -p tsconfig.json",
-    "postinstall": "prisma generate",
+    "dev": "npx tsx watch src/server.ts",
+    "build": "npx prisma generate && npx tsc -p tsconfig.json",
+    "postinstall": "npx prisma generate || true",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npx tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
@@ -29,6 +29,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.7",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -36,7 +37,7 @@
     "@types/node": "^26.1.2",
     "@types/nodemailer": "^6.4.16",
     "@types/uuid": "^10.0.0",
-    "argon2": "^0.41.1",
+    "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
