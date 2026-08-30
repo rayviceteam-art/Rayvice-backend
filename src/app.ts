@@ -39,10 +39,15 @@ export function createApp(): Express {
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({ success: true, message: 'OK', data: { status: 'healthy' } });
   });
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.status(200).json({ success: true, message: 'OK', data: { status: 'healthy' } });
+  });
 
-  // --- API v1 routes (BACKEND-04 §3 API Versioning) ---
+  // --- API routes (supporting both /api/v1 and /api) ---
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/business', businessRoutes);
+  app.use('/api/auth', authRoutes);
+  app.use('/api/business', businessRoutes);
 
   // --- 404 + centralized error handling (BACKEND-01 §7) ---
   app.use(notFoundHandler);
