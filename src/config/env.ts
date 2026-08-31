@@ -50,7 +50,7 @@ const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
   // Intentionally synchronous & fatal — an invalid config must never reach production traffic.
   // eslint-disable-next-line no-console
-  console.error('❌ Invalid environment configuration:', parsed.error.flatten().fieldErrors);
+  console.error('[CONFIG ERROR] Invalid environment configuration:', parsed.error.flatten().fieldErrors);
   process.exit(1);
 }
 
