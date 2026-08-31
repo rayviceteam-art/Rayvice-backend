@@ -22,16 +22,16 @@ export const listBusinesses = asyncHandler(async (req: Request, res: Response) =
 });
 
 export const getBusiness = asyncHandler(async (req: Request, res: Response) => {
-  const business = await adminService.getBusinessDetails(req.params.id);
+  const business = await adminService.getBusinessDetails(req.params.id as string);
   sendSuccess(res, 200, 'Business details retrieved successfully.', business);
 });
 
 export const updateBusinessStatus = asyncHandler(async (req: Request, res: Response) => {
   const meta = requestMeta(req);
   const updated = await adminService.updateBusinessStatus(
-    req.params.id,
+    req.params.id as string,
     req.body,
-    req.user!.userId,
+    req.user!.id,
     meta
   );
   sendSuccess(res, 200, 'Business status updated successfully.', updated);
@@ -40,9 +40,9 @@ export const updateBusinessStatus = asyncHandler(async (req: Request, res: Respo
 export const extendTrial = asyncHandler(async (req: Request, res: Response) => {
   const meta = requestMeta(req);
   const updated = await adminService.extendBusinessTrial(
-    req.params.id,
+    req.params.id as string,
     req.body,
-    req.user!.userId,
+    req.user!.id,
     meta
   );
   sendSuccess(res, 200, 'Business trial extended successfully.', updated);

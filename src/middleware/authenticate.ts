@@ -9,6 +9,7 @@ export interface AuthenticatedUser {
   id: string;
   businessId: string;
   role: UserRole;
+  email: string;
 }
 
 declare global {
@@ -51,6 +52,7 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     where: { id: payload.sub },
     select: {
       id: true,
+      email: true,
       businessId: true,
       role: true,
       status: true,
@@ -75,6 +77,7 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     id: user.id,
     businessId: user.businessId,
     role: user.role,
+    email: user.email,
   };
 
   next();
