@@ -28,6 +28,10 @@ export class ApiError extends Error {
     return new ApiError(401, errorCode, message);
   }
 
+  static paymentRequired(message = 'Subscription required to perform this action.', errorCode = 'PAYMENT_REQUIRED', details?: unknown): ApiError {
+    return new ApiError(402, errorCode, message, details);
+  }
+
   static forbidden(message = 'You do not have permission to perform this action.', errorCode = 'FORBIDDEN'): ApiError {
     return new ApiError(403, errorCode, message);
   }

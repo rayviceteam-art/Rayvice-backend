@@ -56,7 +56,7 @@
 All records are strictly isolated by `businessId` (Tenant isolation).
 
 ### Module 1 Models (`prisma/schema.prisma` - Implemented):
-- **`Business`**: The sole-trader / business tenant entity. Includes trial tracking (`trialStartedAt`, `trialEndsAt`, `hasUsedTrial`, `status`).
+- **`Business`**: The sole-trader / business tenant entity. Includes 9-day trial tracking (`trialStartedAt`, `trialEndsAt`, `hasUsedTrial`, `status`). Limited to 1 participant during trial.
   - Statuses: `TRIALING`, `ACTIVE`, `READ_ONLY`, `SUSPENDED`
 - **`User`**: Belongs to exactly 1 Business.
   - Roles: `OWNER`, `OFFICE_MANAGER`, `TECHNICIAN`

@@ -58,11 +58,40 @@ graph TD
 
 | Module | Status | Name | Core Business Objective | Primary Endpoints |
 | :--- | :--- | :--- | :--- | :--- |
-| **Module 1** | ✅ **DONE** | **Auth & Tenant Foundation** | Multi-tenant user registration, secure session tokens, brute-force lockout, Google OAuth. | `/api/v1/auth/*` |
+| **Module 1** | ✅ **DONE** | **Auth & Tenant Foundation** | Multi-tenant user registration, secure session tokens, brute-force lockout, Google OAuth, 9-day trial. | `/api/v1/auth/*` |
 | **Module 2** | 🔨 **TODO** | **Business Profile & Bank Details** | Australian ABN (11 digits), BSB (`XXX-XXX`), Bank Account, custom invoice prefixes, GST settings. | `/api/v1/business/profile`, `/api/v1/business/bank-details` |
 | **Module 3** | 🔨 **TODO** | **NDIS Participant Directory** | 9-digit NDIS validation, Plan Management routing (Plan-Managed vs Self-Managed), budget caps. | `/api/v1/clients/*` |
 | **Module 4** | 🔨 **TODO** | **Shift Logging & Auto-Split Engine** | Voice/Text shift intake, 8:00 PM evening rate threshold split, weekend/holiday rates, travel km math. | `/api/v1/shifts/*`, `/api/v1/shifts/voice-parse` |
 | **Module 5** | 🔨 **TODO** | **Invoicing, Shield & Dispatch** | Pre-Flight Auto-Rejection Shield, compliant PDF generation, direct Plan Manager email delivery, Stripe gating. | `/api/v1/invoices/*`, `/api/v1/invoices/generate` |
+
+---
+
+## 2.1 PRICING TIERS, 9-DAY FREE TRIAL & FEATURE GATING RULES
+
+### A. Subscription Plans & Tier Limits (AUD)
+
+| Feature / Metric | 🎁 9-Day Free Trial | ⚡ Starter Plan ($24 AUD/mo) | 🚀 Pro Plan ($44 AUD/mo) |
+| :--- | :--- | :--- | :--- |
+| **Price** | **$0 AUD** (No credit card) | **$24 AUD / month** | **$44 AUD / month** |
+| **Duration / Billing** | 9 Days (216 hours) | Monthly Recurring (Stripe) | Monthly Recurring (Stripe) |
+| **Active Participants** | **Max 1 Participant** | **Max 5 Participants** | **Unlimited Participants** |
+| **Shift Logging** | Up to 5 Shifts | **Unlimited Shifts** | **Unlimited Shifts** |
+| **Live Rate-Split Engine**| ✅ Full (Day/Evening/Weekend) | ✅ Full | ✅ Full |
+| **Compliant Invoicing** | Up to 2 Invoices | Up to 20 Invoices / month | **Unlimited Invoices** |
+| **Pre-Flight Shield** | ✅ Active (Zero Rejections) | ✅ Active | ✅ Active |
+| **Direct Email Dispatch** | ✅ 2 Test Dispatches | ✅ Resend API Delivery | ✅ Resend API Delivery |
+| **Voice AI Logging** | 3 Voice Transcriptions | Manual Shift Logging | 🎙️ **Unlimited Voice AI** |
+| **ATO / PRODA Export** | ❌ None | Standard PDF Invoices | ✅ PRODA CSV + PDF Invoices |
+
+### B. Free Trial Gating & Enforcement Logic
+1. **Creation:** Upon registration (`POST /api/v1/auth/register`), the business record is created with `status = 'TRIALING'`, `hasUsedTrial = true`, and `trialEndsAt = now() + 216 hours` (9 days).
+2. **Participant Creation Guard:** If `business.status === 'TRIALING'`, `POST /api/v1/clients` checks if active client count >= 1. If so, rejects with `403 Forbidden: Free trial is limited to 1 active participant. Upgrade to Starter or Pro to add more.`
+3. **Shift Creation Guard:** If `business.status === 'TRIALING'`, `POST /api/v1/shifts` checks if total logged shifts >= 5. If so, returns `403 Forbidden: Free trial limit of 5 shifts reached. Subscribe to continue logging.`
+4. **Invoice Generation Guard:** If `business.status === 'TRIALING'`, `POST /api/v1/invoices/generate` checks if total generated invoices >= 2.
+5. **Trial Expiration (`READ_ONLY` Mode):**
+   - Evaluated dynamically in `trial.util.ts`: if `status === 'TRIALING'` and `trialEndsAt <= now()`, effective status is `READ_ONLY`.
+   - In `READ_ONLY` mode, all `POST`, `PUT`, and `DELETE` operational requests return `402 Payment Required: Your 9-day trial has ended. Please choose a subscription plan to resume operations.`
+   - All `GET` requests (historical tax invoices, participant records, audit logs) remain 100% accessible to satisfy ATO 5-year tax record retention laws.
 
 ---
 
@@ -432,7 +461,7 @@ model InvoiceLineItem {
 ### 📌 MODULE 1: AUTHENTICATION & MULTI-TENANT FOUNDATION (IMPLEMENTED)
 
 #### 1.1 Problem & Business Purpose
-Australian sole traders require secure, isolated tenant spaces. Registration must automatically provision an enterprise-grade multi-tenant `Business` record and initialize a **3-day free trial** without requiring credit cards upfront.
+Australian sole traders require secure, isolated tenant spaces. Registration must automatically provision an enterprise-grade multi-tenant `Business` record and initialize a **9-day free trial** (216 hours, 1 participant limit, 5 shifts, 2 invoices) without requiring credit cards upfront.
 
 #### 1.2 Key Mechanics & Architectural Rules
 1. **Tenant Isolation:** Every operational table references `businessId`. All service queries MUST filter by `where: { businessId }`. Cross-tenant data leakage is impossible.
@@ -810,7 +839,7 @@ All routes require `Authorization: Bearer <accessToken>` header unless marked pu
 Base URL: /api/v1 (and backward-compatible /api)
 
 Module 1: Authentication & Session
-POST   /auth/register              # Register business & owner (starts 3-day trial)
+POST   /auth/register              # Register business & owner (starts 9-day trial)
 POST   /auth/login                 # Email/password authentication
 POST   /auth/google                # Google OAuth 2.0 verification & provisioning
 POST   /auth/refresh               # Rotate refresh token (from HttpOnly cookie)

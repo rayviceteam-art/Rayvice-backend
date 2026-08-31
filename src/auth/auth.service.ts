@@ -7,7 +7,7 @@ import { signAccessToken } from '../utils/jwt';
 import { generateOpaqueToken, hashOpaqueToken } from '../utils/token';
 import { sendEmail } from '../utils/email.service';
 import { recordAuditEvent } from '../audit/audit.service';
-import { computeTrialEndDate } from '../business/trial.util';
+import { computeTrialEndDate, deriveEffectiveBusinessStatus, getTrialDetails } from '../business/trial.util';
 import { logger } from '../config/logger';
 import {
   ForgotPasswordInput,
@@ -87,7 +87,7 @@ function parseDurationToMs(duration: string): number {
 
 /**
  * Registers a new Business (tenant) and its first user as OWNER.
- * GLOBAL-RULES §2 — starts the 3-day trial immediately, no card required.
+ * GLOBAL-RULES §2 — starts the 9-day trial immediately, no card required.
  * BACKEND-02 §7 — "Prevent duplicate businesses" is enforced via the unique
  * constraint on Business.email and User.email at the database layer.
  */
@@ -469,7 +469,17 @@ export async function getCurrentUserProfile(userId: string) {
     throw ApiError.notFound('User not found.');
   }
 
-  return user;
+  const effectiveStatus = deriveEffectiveBusinessStatus(user.business);
+  const trial = getTrialDetails(user.business);
+
+  return {
+    ...user,
+    business: {
+      ...user.business,
+      effectiveStatus,
+      trial,
+    },
+  };
 }
 
 export interface GoogleUserInfo {

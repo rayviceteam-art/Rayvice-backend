@@ -6,7 +6,7 @@ import { sendEmail } from '../utils/email.service';
 import { recordAuditEvent } from '../audit/audit.service';
 import { hashPassword } from '../utils/password';
 import { buildPaginationMeta, paginationSkip } from '../utils/pagination';
-import { deriveEffectiveBusinessStatus } from './trial.util';
+import { deriveEffectiveBusinessStatus, getTrialDetails } from './trial.util';
 import { RequestMeta } from '../auth/auth.service';
 import { InviteTeamMemberInput, AcceptInviteInput, ListTeamQuery, UpdateBusinessInput } from './business.validators';
 
@@ -214,7 +214,10 @@ export async function getBusinessProfile(businessId: string) {
     throw ApiError.notFound('Business not found.');
   }
 
-  return { ...business, effectiveStatus: deriveEffectiveBusinessStatus(business) };
+  const effectiveStatus = deriveEffectiveBusinessStatus(business);
+  const trial = getTrialDetails(business);
+
+  return { ...business, effectiveStatus, trial };
 }
 
 /**
