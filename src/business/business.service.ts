@@ -62,7 +62,7 @@ export async function inviteTeamMember(businessId: string, input: InviteTeamMemb
   await sendEmail({
     to: invitedUser.email,
     subject: "You've been invited to join Rayvice",
-    html: `<p>Hi ${invitedUser.firstName},</p><p>You have been invited to join your team on Rayvice as a ${input.role === 'OFFICE_MANAGER' ? 'Office Manager' : 'Technician'}.</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This invitation expires in ${env.INVITE_TOKEN_TTL_HOURS} hours.</p>`,
+    html: `<p>Hi ${invitedUser.firstName},</p><p>You have been invited to join your team on Rayvice as a ${input.role === 'OFFICE_MANAGER' ? 'Office Manager' : 'Support Worker / Team Member'}.</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This invitation expires in ${env.INVITE_TOKEN_TTL_HOURS} hours.</p>`,
     text: `You've been invited to join Rayvice. Accept your invite: ${inviteUrl} (expires in ${env.INVITE_TOKEN_TTL_HOURS} hours)`,
   });
 

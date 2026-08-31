@@ -1,7 +1,7 @@
 {
   "name": "rayvice-backend",
   "version": "1.0.0",
-  "description": "Rayvice - AI-powered business management platform backend",
+  "description": "Rayvice — NDIS Sole-Trader Billing & Compliance OS Backend",
   "main": "dist/server.js",
   "private": true,
   "engines": {

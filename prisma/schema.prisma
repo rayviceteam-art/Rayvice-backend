@@ -77,6 +77,12 @@ model Business {
   phone    String?
   industry String?
 
+  // NDIS Sole-Trader Australian Business & Bank Details
+  abn           String?
+  bsb           String?
+  accountNumber String?
+  bankName      String?
+
   status BusinessStatus @default(TRIALING)
 
   // --- Trial Policy (GLOBAL-RULES §2) ---
@@ -91,6 +97,9 @@ model Business {
 
   users     User[]
   auditLogs AuditLog[]
+  clients   Client[]
+  shifts    Shift[]
+  invoices  Invoice[]
 
   @@index([status])
   @@index([createdAt])
@@ -131,6 +140,7 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   invitationTokens        InvitationToken[]
   auditLogs               AuditLog[]
+  shifts                  Shift[]
 
   @@index([businessId])
   @@index([status])
@@ -240,4 +250,150 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// =============================================================================
+// NDIS Support Catalogue (Official Australian Government Price Limits)
+// =============================================================================
+model NdisSupportItem {
+  itemNumber             String   @id @map("item_number") // e.g. "01_011_0107_1_1"
+  supportItemName        String   @map("support_item_name")
+  categoryName           String   @map("category_name")
+  unit                   String   @default("Hour") // "Hour", "Each", "KM"
+  nationalWeekdayRate    Decimal  @map("national_weekday_rate") @db.Decimal(10, 2) // e.g. 67.56
+  nationalEveningRate    Decimal? @map("national_evening_rate") @db.Decimal(10, 2) // e.g. 74.42 (after 8:00 PM)
+  nationalSaturdayRate   Decimal? @map("national_saturday_rate") @db.Decimal(10, 2) // e.g. 95.07
+  nationalSundayRate     Decimal? @map("national_sunday_rate") @db.Decimal(10, 2) // e.g. 122.59
+  nationalHolidayRate    Decimal? @map("national_holiday_rate") @db.Decimal(10, 2) // e.g. 150.12
+  isTravelAllowed        Boolean  @default(true) @map("is_travel_allowed")
+  effectiveFrom          DateTime @map("effective_from")
+  effectiveTo            DateTime? @map("effective_to")
+
+  clients                Client[]
+
+  @@map("ndis_support_items")
+}
+
+// =============================================================================
+// NDIS Clients (Participants)
+// =============================================================================
+enum PlanManagementType {
+  PLAN_MANAGED
+  SELF_MANAGED
+  NDIA_MANAGED
+}
+
+model Client {
+  id                     String             @id @default(uuid())
+  businessId             String             @map("business_id")
+  participantName        String             @map("participant_name")
+  ndisNumber             String             @map("ndis_number") // 9 digits, e.g. "430123456"
+  dateOfBirth            DateTime?          @map("date_of_birth")
+  planManagementType     PlanManagementType @default(PLAN_MANAGED) @map("plan_management_type")
+  planManagerAgencyName  String?            @map("plan_manager_agency_name") // e.g. "My Plan Manager"
+  planManagerEmail       String?            @map("plan_manager_email") // e.g. "invoices@myplanmanager.com.au"
+  hourlyRateAgreed       Decimal?           @map("hourly_rate_agreed") @db.Decimal(10, 2)
+  defaultSupportItemCode String?            @map("default_support_item_code")
+  isActive               Boolean            @default(true) @map("is_active")
+
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+  deletedAt              DateTime?          @map("deleted_at")
+
+  business               Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  defaultSupportItem     NdisSupportItem?   @relation(fields: [defaultSupportItemCode], references: [itemNumber])
+  shifts                 Shift[]
+  invoices               Invoice[]
+
+  @@index([businessId])
+  @@index([ndisNumber])
+  @@map("clients")
+}
+
+// =============================================================================
+// Shifts (Daily Work Logs)
+// =============================================================================
+model Shift {
+  id             String    @id @default(uuid())
+  businessId     String    @map("business_id")
+  userId         String    @map("user_id") // Worker who logged the shift
+  clientId       String    @map("client_id")
+  shiftDate      DateTime  @map("shift_date") @db.Date
+  startTime      String    @map("start_time") // "18:00"
+  endTime        String    @map("end_time") // "21:30"
+  totalHours     Decimal   @map("total_hours") @db.Decimal(5, 2)
+  travelKms      Decimal   @default(0.0) @map("travel_kms") @db.Decimal(6, 2)
+  travelMinutes  Int       @default(0) @map("travel_minutes")
+  caseNotes      String?   @map("case_notes") @db.Text
+  isInvoiced     Boolean   @default(false) @map("is_invoiced")
+  invoiceId      String?   @map("invoice_id")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  business       Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  invoice        Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, isInvoiced])
+  @@index([clientId])
+  @@map("shifts")
+}
+
+// =============================================================================
+// Invoices (Australian Compliant NDIS Tax Invoices)
+// =============================================================================
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+model Invoice {
+  id              String             @id @default(uuid())
+  businessId      String             @map("business_id")
+  clientId        String             @map("client_id")
+  invoiceNumber   String             @map("invoice_number") // e.g. "INV-2026-001"
+  issueDate       DateTime           @default(now()) @map("issue_date") @db.Date
+  dueDate         DateTime           @map("due_date") @db.Date
+  subtotalAmount  Decimal            @map("subtotal_amount") @db.Decimal(10, 2)
+  gstAmount       Decimal            @default(0.00) @map("gst_amount") @db.Decimal(10, 2)
+  totalAmount     Decimal            @map("total_amount") @db.Decimal(10, 2)
+  status          InvoiceStatus      @default(DRAFT)
+  recipientEmail  String             @map("recipient_email")
+  pdfUrl          String?            @map("pdf_url")
+  sentAt          DateTime?          @map("sent_at")
+  paidAt          DateTime?          @map("paid_at")
+
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  business        Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  client          Client             @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  shifts          Shift[]
+  lineItems       InvoiceLineItem[]
+
+  @@index([businessId, status])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id              String   @id @default(uuid())
+  invoiceId       String   @map("invoice_id")
+  serviceDate     DateTime @map("service_date") @db.Date
+  supportItemCode String   @map("support_item_code") // e.g. "01_011_0107_1_1"
+  description     String
+  quantity        Decimal  @map("quantity") @db.Decimal(6, 2) // Hours or KMs
+  unitPrice       Decimal  @map("unit_price") @db.Decimal(10, 2)
+  totalAmount     Decimal  @map("total_amount") @db.Decimal(10, 2)
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_line_items")
 }
