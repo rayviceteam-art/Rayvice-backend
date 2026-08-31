@@ -112,7 +112,7 @@ All records are strictly isolated by `businessId` (Tenant isolation).
 ## 6. NDIS Product Roadmap
 
 1. **Module 1: Authentication & Multi-Tenant Foundation** ✅ (COMPLETE)
-2. **Module 2: Business Profile & NDIS Billing Setup** (ABN, BSB/Bank Details, Invoice Prefix)
+2. **Module 2: Business Profile, Australian Banking & Pre-Flight Compliance** ✅ (COMPLETE)
 3. **Module 3: NDIS Participant & Plan Manager Directory** (9-digit NDIS validation, agency emails)
 4. **Module 4: Shift Logging & Auto-Split Calculation Engine** (Voice intake, 8:00 PM evening split, weekend rate calculation)
 5. **Module 5: Invoicing, Auto-Rejection Shield & Plan Manager Dispatch** (Pre-flight validator, `@react-pdf` engine, Resend delivery)

@@ -50,6 +50,8 @@ enum BusinessStatus {
 /// Categorized audit event types for consistent, queryable audit logs.
 enum AuditAction {
   BUSINESS_REGISTERED
+  BUSINESS_PROFILE_UPDATED
+  BANK_DETAILS_UPDATED
   USER_INVITED
   USER_INVITE_ACCEPTED
   LOGIN_SUCCESS
@@ -77,11 +79,18 @@ model Business {
   phone    String?
   industry String?
 
-  // NDIS Sole-Trader Australian Business & Bank Details
-  abn           String?
-  bsb           String?
-  accountNumber String?
-  bankName      String?
+  // NDIS Sole-Trader Australian Business, Banking & Compliance Details
+  abn             String?
+  bsb             String?
+  accountNumber   String?
+  accountName     String?
+  bankName        String?
+  invoicePrefix   String   @default("INV")
+  isGstRegistered Boolean  @default(false)
+  address         String?
+  suburb          String?
+  state           String?
+  postcode        String?
 
   status BusinessStatus @default(TRIALING)
 

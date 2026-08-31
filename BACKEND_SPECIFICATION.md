@@ -59,7 +59,7 @@ graph TD
 | Module | Status | Name | Core Business Objective | Primary Endpoints |
 | :--- | :--- | :--- | :--- | :--- |
 | **Module 1** | ✅ **DONE** | **Auth & Tenant Foundation** | Multi-tenant user registration, secure session tokens, brute-force lockout, Google OAuth, 9-day trial. | `/api/v1/auth/*` |
-| **Module 2** | 🔨 **TODO** | **Business Profile & Bank Details** | Australian ABN (11 digits), BSB (`XXX-XXX`), Bank Account, custom invoice prefixes, GST settings. | `/api/v1/business/profile`, `/api/v1/business/bank-details` |
+| **Module 2** | ✅ **DONE** | **Business Profile & Bank Details** | Australian ABN (ATO Modulo-89), BSB (`XXX-XXX`), Bank Account, custom invoice prefixes, GST & Pre-Flight compliance check. | `/api/v1/business/profile`, `/api/v1/business/bank-details`, `/api/v1/business/compliance-status` |
 | **Module 3** | 🔨 **TODO** | **NDIS Participant Directory** | 9-digit NDIS validation, Plan Management routing (Plan-Managed vs Self-Managed), budget caps. | `/api/v1/clients/*` |
 | **Module 4** | 🔨 **TODO** | **Shift Logging & Auto-Split Engine** | Voice/Text shift intake, 8:00 PM evening rate threshold split, weekend/holiday rates, travel km math. | `/api/v1/shifts/*`, `/api/v1/shifts/voice-parse` |
 | **Module 5** | 🔨 **TODO** | **Invoicing, Shield & Dispatch** | Pre-Flight Auto-Rejection Shield, compliant PDF generation, direct Plan Manager email delivery, Stripe gating. | `/api/v1/invoices/*`, `/api/v1/invoices/generate` |
@@ -471,18 +471,19 @@ Australian sole traders require secure, isolated tenant spaces. Registration mus
 
 ---
 
-### 📌 MODULE 2: BUSINESS PROFILE, ABN & BANKING CONFIGURATION
+### 📌 MODULE 2: BUSINESS PROFILE, ABN & BANKING CONFIGURATION (IMPLEMENTED)
 
 #### 2.1 Problem & Business Purpose
 Under the **Australian Taxation Office (ATO)** and **NDIA Invoicing Rules**, a tax invoice issued by a sole trader is invalid and immediately rejected by Plan Managers unless it contains:
-- Valid 11-digit Australian Business Number (ABN).
-- Valid 6-digit Bank State Branch (BSB) code and Account Number for direct EFT payment.
+- Valid 11-digit Australian Business Number (ABN) verified by ATO Modulo 89 algorithm.
+- Valid 6-digit Bank State Branch (BSB) code and Account Number for direct EFT payment remittance.
 - GST registration indicator (NDIS core supports are generally GST-free, but invoice must state `$0.00 GST`).
-- Sequential invoice numbering with configurable prefix.
+- Physical business address for valid tax invoice header.
+- Sequential invoice numbering with custom prefix (e.g. `INV`, `SW-`, `CARE-`).
 
 #### 2.2 API Endpoints Specification
 
-##### `GET /api/v1/business/profile`
+##### `GET /api/v1/business/profile` (and `/api/v1/business/me`)
 - **Auth:** Required (Any authenticated user of the business).
 - **Response `200 OK`:**
 ```json
@@ -496,35 +497,54 @@ Under the **Australian Taxation Office (ATO)** and **NDIA Invoicing Rules**, a t
     "phone": "0412 345 678",
     "industry": "NDIS Support Worker",
     "abn": "51824753556",
+    "formattedAbn": "51 824 753 556",
     "bsb": "062-000",
+    "formattedBsb": "062-000",
     "accountNumber": "12345678",
-    "bankName": "Commonwealth Bank",
+    "accountName": "Liam Support Services",
+    "bankName": "Commonwealth Bank of Australia (CBA)",
     "invoicePrefix": "INV",
     "isGstRegistered": false,
+    "address": "123 George Street",
+    "suburb": "Sydney",
+    "state": "NSW",
+    "postcode": "2000",
     "status": "TRIALING",
-    "trialEndsAt": "2026-09-03T12:00:00.000Z"
+    "effectiveStatus": "TRIALING",
+    "trial": {
+      "daysRemaining": 9,
+      "isExpired": false,
+      "limits": { "MAX_CLIENTS": 1, "MAX_SHIFTS": 5, "MAX_INVOICES": 2 }
+    },
+    "compliance": {
+      "isCompliant": true,
+      "readinessPercentage": 100,
+      "checklist": { "abn": true, "bankDetails": true, "businessAddress": true, "contactInfo": true, "invoicePrefix": true },
+      "missingFields": [],
+      "recommendations": []
+    }
   }
 }
 ```
 
-##### `PUT /api/v1/business/profile`
+##### `PUT /api/v1/business/profile` (and `PATCH /api/v1/business/profile`)
 - **Auth:** Required (`OWNER` role only).
-- **Zod Validator:**
-```typescript
-export const updateBusinessProfileSchema = z.object({
-  body: z.object({
-    name: z.string().trim().min(2).max(150).optional(),
-    phone: z.string().trim().min(7).max(20).optional(),
-    industry: z.string().trim().max(100).optional(),
-    abn: z.string().trim().regex(/^\d{11}$/, 'ABN must be exactly 11 numeric digits.').optional(),
-    bsb: z.string().trim().regex(/^\d{3}-?\d{3}$/, 'BSB must be 6 digits format (e.g. 062-000).').optional(),
-    accountNumber: z.string().trim().min(6).max(9, 'Account number must be 6 to 9 digits.').optional(),
-    bankName: z.string().trim().min(2).max(100).optional(),
-    invoicePrefix: z.string().trim().min(1).max(10).default('INV').optional(),
-    isGstRegistered: z.boolean().default(false).optional(),
-  }),
-});
-```
+- **Zod Validator:** `updateBusinessProfileSchema` (validates ATO Modulo 89 ABN checksum, BSB format, postcode, state).
+- **Audit Action:** `BUSINESS_PROFILE_UPDATED`.
+
+##### `GET /api/v1/business/bank-details` & `PUT /api/v1/business/bank-details`
+- **Auth:** Required (`OWNER` for PUT).
+- **Features:** Auto-identifies Australian financial institution from BSB prefix (CBA, ANZ, Westpac, NAB, Macquarie, etc.).
+- **Audit Action:** `BANK_DETAILS_UPDATED`.
+
+##### `POST /api/v1/business/validate-abn`
+- **Auth:** Rate-limited helper endpoint for live ABN validation.
+- **Body:** `{ "abn": "51824753556" }`
+- **Returns:** `{ "isValid": true, "formatted": "51 824 753 556", "digits": "51824753556" }`
+
+##### `GET /api/v1/business/compliance-status`
+- **Auth:** Required.
+- **Returns:** Pre-Flight NDIS Tax Invoice Compliance Readiness Report with checklist and recommendations.
 
 ---
 

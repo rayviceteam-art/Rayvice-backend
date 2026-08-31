@@ -13,12 +13,42 @@ function requestMeta(req: Request) {
 
 export const getMyBusiness = asyncHandler(async (req: Request, res: Response) => {
   const business = await businessService.getBusinessProfile(req.user!.businessId);
-  sendSuccess(res, 200, 'Business profile retrieved.', business);
+  sendSuccess(res, 200, 'Business profile retrieved successfully.', business);
 });
 
 export const updateMyBusiness = asyncHandler(async (req: Request, res: Response) => {
-  const business = await businessService.updateBusinessProfile(req.user!.businessId, req.body);
-  sendSuccess(res, 200, 'Business profile updated.', business);
+  const business = await businessService.updateBusinessProfile(
+    req.user!.businessId,
+    req.body,
+    req.user!.id,
+    requestMeta(req)
+  );
+  sendSuccess(res, 200, 'Business profile updated successfully.', business);
+});
+
+export const getBankDetails = asyncHandler(async (req: Request, res: Response) => {
+  const bankDetails = await businessService.getBankDetails(req.user!.businessId);
+  sendSuccess(res, 200, 'Bank details retrieved successfully.', bankDetails);
+});
+
+export const updateBankDetails = asyncHandler(async (req: Request, res: Response) => {
+  const bankDetails = await businessService.updateBankDetails(
+    req.user!.businessId,
+    req.body,
+    req.user!.id,
+    requestMeta(req)
+  );
+  sendSuccess(res, 200, 'Bank details updated successfully.', bankDetails);
+});
+
+export const getComplianceStatus = asyncHandler(async (req: Request, res: Response) => {
+  const compliance = await businessService.getComplianceStatus(req.user!.businessId);
+  sendSuccess(res, 200, 'Compliance readiness report retrieved.', compliance);
+});
+
+export const validateAbn = asyncHandler(async (req: Request, res: Response) => {
+  const result = businessService.validateAbnHelper(req.body.abn);
+  sendSuccess(res, 200, result.isValid ? 'Valid Australian Business Number (ABN).' : 'Invalid ABN.', result);
 });
 
 export const inviteTeamMember = asyncHandler(async (req: Request, res: Response) => {

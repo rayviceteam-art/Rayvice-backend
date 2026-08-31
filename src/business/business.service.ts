@@ -6,9 +6,22 @@ import { sendEmail } from '../utils/email.service';
 import { recordAuditEvent } from '../audit/audit.service';
 import { hashPassword } from '../utils/password';
 import { buildPaginationMeta, paginationSkip } from '../utils/pagination';
-import { deriveEffectiveBusinessStatus, getTrialDetails } from './trial.util';
+import { deriveEffectiveBusinessStatus, getTrialDetails, assertCanMutate } from './trial.util';
 import { RequestMeta } from '../auth/auth.service';
-import { InviteTeamMemberInput, AcceptInviteInput, ListTeamQuery, UpdateBusinessInput } from './business.validators';
+import {
+  InviteTeamMemberInput,
+  AcceptInviteInput,
+  ListTeamQuery,
+  UpdateBusinessProfileInput,
+  UpdateBankDetailsInput,
+} from './business.validators';
+import {
+  validateAbn,
+  validateAndFormatBsb,
+  validateAccountNumber,
+  evaluateComplianceReadiness,
+  ComplianceReport,
+} from './australianCompliance.util';
 
 const teamMemberSelect = {
   id: true,
@@ -22,11 +35,37 @@ const teamMemberSelect = {
   createdAt: true,
 } as const;
 
+const businessProfileSelect = {
+  id: true,
+  name: true,
+  email: true,
+  phone: true,
+  industry: true,
+  abn: true,
+  bsb: true,
+  accountNumber: true,
+  accountName: true,
+  bankName: true,
+  invoicePrefix: true,
+  isGstRegistered: true,
+  address: true,
+  suburb: true,
+  state: true,
+  postcode: true,
+  status: true,
+  trialStartedAt: true,
+  trialEndsAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
 /**
  * Invites a new Office Manager or Technician into the acting Owner's business.
  * BACKEND-03 §3 — "Team Management" is an Owner-only permission.
  */
 export async function inviteTeamMember(businessId: string, input: InviteTeamMemberInput, meta: RequestMeta) {
+  await assertCanMutate(businessId);
+
   const existingUser = await prisma.user.findUnique({ where: { email: input.email } });
   if (existingUser) {
     throw ApiError.conflict('A user with this email already exists.', 'EMAIL_ALREADY_REGISTERED');
@@ -152,6 +191,8 @@ async function assertUserBelongsToBusiness(businessId: string, userId: string) {
 }
 
 export async function suspendTeamMember(businessId: string, targetUserId: string, actingUserId: string, meta: RequestMeta) {
+  await assertCanMutate(businessId);
+
   if (targetUserId === actingUserId) {
     throw ApiError.badRequest('You cannot suspend your own account.', 'CANNOT_SUSPEND_SELF');
   }
@@ -177,6 +218,8 @@ export async function suspendTeamMember(businessId: string, targetUserId: string
 }
 
 export async function reactivateTeamMember(businessId: string, targetUserId: string, actingUserId: string, meta: RequestMeta) {
+  await assertCanMutate(businessId);
+
   const user = await assertUserBelongsToBusiness(businessId, targetUserId);
   if (user.status !== 'SUSPENDED') {
     throw ApiError.badRequest('Only suspended team members can be reactivated.', 'USER_NOT_SUSPENDED');
@@ -194,20 +237,18 @@ export async function reactivateTeamMember(businessId: string, targetUserId: str
   });
 }
 
+// =============================================================================
+// MODULE 2: Business Profile, Australian Compliance & Banking Services
+// =============================================================================
+
+/**
+ * Retrieves the comprehensive business profile, Australian compliance parameters,
+ * bank payment details, and trial status.
+ */
 export async function getBusinessProfile(businessId: string) {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      phone: true,
-      industry: true,
-      status: true,
-      trialStartedAt: true,
-      trialEndsAt: true,
-      createdAt: true,
-    },
+    select: businessProfileSelect,
   });
 
   if (!business) {
@@ -216,20 +257,228 @@ export async function getBusinessProfile(businessId: string) {
 
   const effectiveStatus = deriveEffectiveBusinessStatus(business);
   const trial = getTrialDetails(business);
+  const compliance = evaluateComplianceReadiness(business);
 
-  return { ...business, effectiveStatus, trial };
+  // Formatted representations
+  const formattedAbn = business.abn ? validateAbn(business.abn).formatted || business.abn : null;
+  const formattedBsb = business.bsb ? validateAndFormatBsb(business.bsb).formatted || business.bsb : null;
+
+  return {
+    ...business,
+    formattedAbn,
+    formattedBsb,
+    effectiveStatus,
+    trial,
+    compliance,
+  };
 }
 
 /**
- * Updates business profile fields. Restricted to Owner (Settings permission,
- * BACKEND-03 §3).
+ * Updates business profile, Australian tax settings, and banking details.
+ * Restricted to OWNER role.
  */
-export async function updateBusinessProfile(businessId: string, input: UpdateBusinessInput) {
-  const business = await prisma.business.update({
+export async function updateBusinessProfile(
+  businessId: string,
+  input: UpdateBusinessProfileInput,
+  actingUserId: string,
+  meta: RequestMeta
+) {
+  await assertCanMutate(businessId);
+
+  // Sanitize & normalize fields
+  const updateData: Record<string, unknown> = {};
+
+  if (input.name !== undefined) updateData.name = input.name;
+  if (input.phone !== undefined) updateData.phone = input.phone;
+  if (input.industry !== undefined) updateData.industry = input.industry;
+
+  if (input.abn !== undefined) {
+    if (input.abn === null || input.abn === '') {
+      updateData.abn = null;
+    } else {
+      const abnCheck = validateAbn(input.abn);
+      if (!abnCheck.isValid) {
+        throw ApiError.badRequest(abnCheck.error || 'Invalid Australian Business Number (ABN).', 'INVALID_ABN');
+      }
+      updateData.abn = abnCheck.digits;
+    }
+  }
+
+  if (input.bsb !== undefined) {
+    if (input.bsb === null || input.bsb === '') {
+      updateData.bsb = null;
+    } else {
+      const bsbCheck = validateAndFormatBsb(input.bsb);
+      if (!bsbCheck.isValid) {
+        throw ApiError.badRequest(bsbCheck.error || 'Invalid BSB code.', 'INVALID_BSB');
+      }
+      updateData.bsb = bsbCheck.formatted;
+      // Auto-set bankName if not provided and not currently set
+      if (!input.bankName && bsbCheck.bankName) {
+        updateData.bankName = bsbCheck.bankName;
+      }
+    }
+  }
+
+  if (input.accountNumber !== undefined) {
+    if (input.accountNumber === null || input.accountNumber === '') {
+      updateData.accountNumber = null;
+    } else {
+      const accCheck = validateAccountNumber(input.accountNumber);
+      if (!accCheck.isValid) {
+        throw ApiError.badRequest(accCheck.error || 'Invalid account number.', 'INVALID_ACCOUNT_NUMBER');
+      }
+      updateData.accountNumber = accCheck.digits;
+    }
+  }
+
+  if (input.accountName !== undefined) updateData.accountName = input.accountName;
+  if (input.bankName !== undefined) updateData.bankName = input.bankName;
+  if (input.invoicePrefix !== undefined) updateData.invoicePrefix = input.invoicePrefix.toUpperCase();
+  if (input.isGstRegistered !== undefined) updateData.isGstRegistered = input.isGstRegistered;
+  if (input.address !== undefined) updateData.address = input.address;
+  if (input.suburb !== undefined) updateData.suburb = input.suburb;
+  if (input.state !== undefined) updateData.state = input.state;
+  if (input.postcode !== undefined) updateData.postcode = input.postcode;
+
+  const updatedBusiness = await prisma.business.update({
     where: { id: businessId },
-    data: input,
-    select: { id: true, name: true, email: true, phone: true, industry: true, status: true, updatedAt: true },
+    data: updateData,
+    select: businessProfileSelect,
   });
 
-  return business;
+  await recordAuditEvent({
+    action: 'BUSINESS_PROFILE_UPDATED',
+    businessId,
+    userId: actingUserId,
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+    metadata: { updatedFields: Object.keys(updateData) },
+  });
+
+  const effectiveStatus = deriveEffectiveBusinessStatus(updatedBusiness);
+  const trial = getTrialDetails(updatedBusiness);
+  const compliance = evaluateComplianceReadiness(updatedBusiness);
+
+  return {
+    ...updatedBusiness,
+    effectiveStatus,
+    trial,
+    compliance,
+  };
+}
+
+/**
+ * Retrieves EFT remittance banking details specifically.
+ */
+export async function getBankDetails(businessId: string) {
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: {
+      id: true,
+      name: true,
+      bsb: true,
+      accountNumber: true,
+      accountName: true,
+      bankName: true,
+      isGstRegistered: true,
+      abn: true,
+    },
+  });
+
+  if (!business) {
+    throw ApiError.notFound('Business not found.');
+  }
+
+  const bsbValidation = business.bsb ? validateAndFormatBsb(business.bsb) : null;
+  const isConfigured = Boolean(business.bsb && business.accountNumber);
+
+  return {
+    isConfigured,
+    bsb: business.bsb,
+    formattedBsb: bsbValidation?.formatted || business.bsb,
+    accountNumber: business.accountNumber,
+    accountName: business.accountName || business.name,
+    bankName: business.bankName || bsbValidation?.bankName || null,
+    abn: business.abn,
+  };
+}
+
+/**
+ * Updates EFT bank details specifically.
+ */
+export async function updateBankDetails(
+  businessId: string,
+  input: UpdateBankDetailsInput,
+  actingUserId: string,
+  meta: RequestMeta
+) {
+  await assertCanMutate(businessId);
+
+  const bsbCheck = validateAndFormatBsb(input.bsb);
+  if (!bsbCheck.isValid) {
+    throw ApiError.badRequest(bsbCheck.error || 'Invalid BSB code.', 'INVALID_BSB');
+  }
+
+  const accCheck = validateAccountNumber(input.accountNumber);
+  if (!accCheck.isValid) {
+    throw ApiError.badRequest(accCheck.error || 'Invalid account number.', 'INVALID_ACCOUNT_NUMBER');
+  }
+
+  const bankName = input.bankName || bsbCheck.bankName || 'Australian Financial Institution';
+
+  const updatedBusiness = await prisma.business.update({
+    where: { id: businessId },
+    data: {
+      bsb: bsbCheck.formatted,
+      accountNumber: accCheck.digits,
+      accountName: input.accountName,
+      bankName,
+    },
+    select: {
+      id: true,
+      bsb: true,
+      accountNumber: true,
+      accountName: true,
+      bankName: true,
+      updatedAt: true,
+    },
+  });
+
+  await recordAuditEvent({
+    action: 'BANK_DETAILS_UPDATED',
+    businessId,
+    userId: actingUserId,
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+    metadata: { bsb: bsbCheck.formatted, bankName },
+  });
+
+  return {
+    isConfigured: true,
+    ...updatedBusiness,
+  };
+}
+
+/**
+ * Evaluates Pre-Flight compliance readiness for NDIS invoicing.
+ */
+export async function getComplianceStatus(businessId: string): Promise<ComplianceReport> {
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: businessProfileSelect,
+  });
+
+  if (!business) {
+    throw ApiError.notFound('Business not found.');
+  }
+
+  return evaluateComplianceReadiness(business);
+}
+
+/**
+ * Helper to validate an Australian ABN via ATO algorithm.
+ */
+export function validateAbnHelper(abn: string) {
+  return validateAbn(abn);
 }
