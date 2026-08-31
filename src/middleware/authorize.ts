@@ -1,6 +1,18 @@
 import { NextFunction, Request, Response } from 'express';
 import { UserRole } from '@prisma/client';
 import { ApiError } from '../utils/ApiError';
+import { env } from '../config/env';
+
+/**
+ * Checks if a user has platform super-admin privileges.
+ */
+export function isUserSuperAdmin(user?: { role?: string; email?: string } | null): boolean {
+  if (!user) return false;
+  if (user.role === 'SUPER_ADMIN') return true;
+  if (!env.SUPER_ADMIN_EMAILS) return false;
+  const adminEmails = env.SUPER_ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
+  return Boolean(user.email && adminEmails.includes(user.email.toLowerCase()));
+}
 
 /**
  * Role-Based Access Control.
@@ -13,10 +25,27 @@ export function authorize(...allowedRoles: UserRole[]) {
       next(ApiError.unauthorized());
       return;
     }
-    if (!allowedRoles.includes(req.user.role)) {
-      next(ApiError.forbidden('Your role does not have permission to perform this action.', 'ROLE_NOT_PERMITTED'));
+    // Super Admins bypass tenant-level role restrictions
+    if (isUserSuperAdmin(req.user) || allowedRoles.includes(req.user.role)) {
+      next();
       return;
     }
-    next();
+    next(ApiError.forbidden('Your role does not have permission to perform this action.', 'ROLE_NOT_PERMITTED'));
   };
+}
+
+/**
+ * Super-Admin Access Restriction.
+ * Ensures the caller is either a designated Super Admin by role or email.
+ */
+export function requireSuperAdmin(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.user) {
+    next(ApiError.unauthorized());
+    return;
+  }
+  if (!isUserSuperAdmin(req.user)) {
+    next(ApiError.forbidden('Super-Admin access required to perform this action.', 'SUPER_ADMIN_REQUIRED'));
+    return;
+  }
+  next();
 }

@@ -43,6 +43,8 @@ const envSchema = z.object({
   EMAIL_VERIFICATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(24),
   PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(60),
   INVITE_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
+
+  SUPER_ADMIN_EMAILS: z.string().optional().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

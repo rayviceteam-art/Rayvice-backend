@@ -8,6 +8,7 @@ import { notFoundHandler } from './middleware/notFoundHandler';
 import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './auth/auth.routes';
 import businessRoutes from './business/business.routes';
+import adminRoutes from './admin/admin.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -46,8 +47,10 @@ export function createApp(): Express {
   // --- API routes (supporting both /api/v1 and /api) ---
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/business', businessRoutes);
+  app.use('/api/v1/admin', adminRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api/business', businessRoutes);
+  app.use('/api/admin', adminRoutes);
 
   // --- 404 + centralized error handling (BACKEND-01 §7) ---
   app.use(notFoundHandler);

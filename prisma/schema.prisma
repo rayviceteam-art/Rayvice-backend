@@ -30,6 +30,7 @@ enum UserRole {
   OWNER
   OFFICE_MANAGER
   TECHNICIAN
+  SUPER_ADMIN
 }
 
 /// Lifecycle status of a user account within its business.
@@ -65,6 +66,8 @@ enum AuditAction {
   EMAIL_VERIFIED
   USER_SUSPENDED
   USER_REACTIVATED
+  SUPER_ADMIN_BUSINESS_STATUS_UPDATED
+  SUPER_ADMIN_TRIAL_EXTENDED
 }
 
 // -----------------------------------------------------------------------------
