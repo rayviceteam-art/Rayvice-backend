@@ -9,6 +9,7 @@ import { sendEmail } from '../utils/email.service';
 import { recordAuditEvent } from '../audit/audit.service';
 import { computeTrialEndDate, deriveEffectiveBusinessStatus, getTrialDetails } from '../business/trial.util';
 import { logger } from '../config/logger';
+import { isUserSuperAdmin } from '../middleware/authorize';
 import {
   ForgotPasswordInput,
   LoginInput,
@@ -245,14 +246,16 @@ export async function login(input: LoginInput, meta: RequestMeta) {
     userAgent: meta.userAgent,
   });
 
-  const tokens = await issueTokenPair(user.id, user.businessId, user.role, meta);
+  const isSuperAdmin = isUserSuperAdmin(user);
+  const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+  const tokens = await issueTokenPair(user.id, user.businessId, effectiveRole, meta);
 
   const { passwordHash: _omit, lockedUntil: _omit2, failedLoginAttempts: _omit3, ...safeUser } = user;
   void _omit;
   void _omit2;
   void _omit3;
 
-  return { user: safeUser, tokens };
+  return { user: { ...safeUser, role: effectiveRole }, tokens };
 }
 
 /**
@@ -471,9 +474,11 @@ export async function getCurrentUserProfile(userId: string) {
 
   const effectiveStatus = deriveEffectiveBusinessStatus(user.business);
   const trial = getTrialDetails(user.business);
+  const isSuperAdmin = isUserSuperAdmin(user);
 
   return {
     ...user,
+    role: isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role,
     business: {
       ...user.business,
       effectiveStatus,
@@ -629,7 +634,9 @@ export async function googleAuth(input: GoogleAuthInput, meta: RequestMeta) {
     });
   }
 
-  const tokens = await issueTokenPair(user.id, business.id, user.role, meta);
+  const isSuperAdmin = isUserSuperAdmin(user);
+  const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+  const tokens = await issueTokenPair(user.id, business.id, effectiveRole, meta);
 
   const sanitizedUser = {
     id: user.id,
@@ -637,7 +644,7 @@ export async function googleAuth(input: GoogleAuthInput, meta: RequestMeta) {
     email: user.email,
     firstName: user.firstName,
     lastName: user.lastName,
-    role: user.role,
+    role: effectiveRole,
     status: user.status,
     emailVerifiedAt: user.emailVerifiedAt,
     lastLoginAt: user.lastLoginAt,

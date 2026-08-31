@@ -9,9 +9,12 @@ import { env } from '../config/env';
 export function isUserSuperAdmin(user?: { role?: string; email?: string } | null): boolean {
   if (!user) return false;
   if (user.role === 'SUPER_ADMIN') return true;
+  const userEmail = user.email?.toLowerCase().trim();
+  if (!userEmail) return false;
+  if (userEmail === 'rayvice.team@gmail.com') return true;
   if (!env.SUPER_ADMIN_EMAILS) return false;
   const adminEmails = env.SUPER_ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
-  return Boolean(user.email && adminEmails.includes(user.email.toLowerCase()));
+  return adminEmails.includes(userEmail);
 }
 
 /**

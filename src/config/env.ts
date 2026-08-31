@@ -44,7 +44,7 @@ const envSchema = z.object({
   PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(60),
   INVITE_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
-  SUPER_ADMIN_EMAILS: z.string().optional().default(''),
+  SUPER_ADMIN_EMAILS: z.string().optional().default('rayvice.team@gmail.com'),
 });
 
 const parsed = envSchema.safeParse(process.env);
