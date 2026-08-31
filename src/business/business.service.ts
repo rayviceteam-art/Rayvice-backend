@@ -360,8 +360,13 @@ export async function updateBusinessProfile(
   const trial = getTrialDetails(updatedBusiness);
   const compliance = evaluateComplianceReadiness(updatedBusiness);
 
+  const formattedAbn = updatedBusiness.abn ? validateAbn(updatedBusiness.abn).formatted || updatedBusiness.abn : null;
+  const formattedBsb = updatedBusiness.bsb ? validateAndFormatBsb(updatedBusiness.bsb).formatted || updatedBusiness.bsb : null;
+
   return {
     ...updatedBusiness,
+    formattedAbn,
+    formattedBsb,
     effectiveStatus,
     trial,
     compliance,
