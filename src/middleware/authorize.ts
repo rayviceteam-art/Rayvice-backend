@@ -11,7 +11,7 @@ export function isUserSuperAdmin(user?: { role?: string; email?: string } | null
   if (user.role === 'SUPER_ADMIN') return true;
   const userEmail = user.email?.toLowerCase().trim();
   if (!userEmail) return false;
-  if (userEmail === 'rayvice.team@gmail.com') return true;
+  if (userEmail === 'rayviceofficial@gmail.com') return true;
   if (!env.SUPER_ADMIN_EMAILS) return false;
   const adminEmails = env.SUPER_ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
   return adminEmails.includes(userEmail);

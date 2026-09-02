@@ -54,6 +54,7 @@ export const updateBusinessProfileSchema = z.object({
       abn: z
         .string()
         .trim()
+        .transform((val) => val.replace(/[\s-]/g, ''))
         .refine(
           (val) => !val || validateAbn(val).isValid,
           { message: 'Invalid Australian Business Number (ABN). Must be 11 numeric digits matching ATO Modulo 89 checksum.' }
@@ -63,17 +64,25 @@ export const updateBusinessProfileSchema = z.object({
       bsb: z
         .string()
         .trim()
-        .regex(/^\d{3}-?\d{3}$/, 'BSB must be 6 numeric digits (e.g. 062-000 or 062000).')
+        .transform((val) => val.replace(/\s+/g, ''))
+        .refine(
+          (val) => !val || /^\d{3}-?\d{3}$/.test(val),
+          { message: 'BSB must be 6 numeric digits (e.g. 063-000 or 063000).' }
+        )
         .optional()
         .nullable(),
       accountNumber: z
         .string()
         .trim()
-        .regex(/^\d{6,9}$/, 'Account number must be 6 to 9 numeric digits.')
+        .transform((val) => val.replace(/[\s-]/g, ''))
+        .refine(
+          (val) => !val || /^\d{6,9}$/.test(val),
+          { message: 'Account number must be 6 to 9 numeric digits (e.g. 12345678).' }
+        )
         .optional()
         .nullable(),
-      accountName: z.string().trim().min(2).max(100).optional().nullable(),
-      bankName: z.string().trim().min(2).max(100).optional().nullable(),
+      accountName: z.string().trim().min(2, 'Account name must be at least 2 characters.').max(100).optional().nullable(),
+      bankName: z.string().trim().min(2, 'Bank name must be at least 2 characters.').max(100).optional().nullable(),
       invoicePrefix: z
         .string()
         .trim()
@@ -88,7 +97,11 @@ export const updateBusinessProfileSchema = z.object({
       postcode: z
         .string()
         .trim()
-        .regex(/^\d{4}$/, 'Australian postcode must be 4 digits.')
+        .transform((val) => val.replace(/\s+/g, ''))
+        .refine(
+          (val) => !val || /^\d{4}$/.test(val),
+          { message: 'Australian postcode must be 4 digits (e.g. 2000).' }
+        )
         .optional()
         .nullable(),
     })
@@ -104,13 +117,21 @@ export const updateBankDetailsSchema = z.object({
     bsb: z
       .string()
       .trim()
-      .regex(/^\d{3}-?\d{3}$/, 'BSB must be 6 numeric digits (e.g. 062-000).'),
+      .transform((val) => val.replace(/\s+/g, ''))
+      .refine(
+        (val) => /^\d{3}-?\d{3}$/.test(val),
+        { message: 'BSB must be 6 numeric digits (e.g. 063-000 or 063000).' }
+      ),
     accountNumber: z
       .string()
       .trim()
-      .regex(/^\d{6,9}$/, 'Account number must be 6 to 9 numeric digits.'),
-    accountName: z.string().trim().min(2).max(100).optional().nullable(),
-    bankName: z.string().trim().min(2).max(100).optional().nullable(),
+      .transform((val) => val.replace(/[\s-]/g, ''))
+      .refine(
+        (val) => /^\d{6,9}$/.test(val),
+        { message: 'Account number must be 6 to 9 numeric digits (e.g. 12345678).' }
+      ),
+    accountName: z.string().trim().min(2, 'Account holder name must be at least 2 characters.').max(100).optional().nullable(),
+    bankName: z.string().trim().min(2, 'Bank name must be at least 2 characters.').max(100).optional().nullable(),
   }),
 });
 export type UpdateBankDetailsInput = z.infer<typeof updateBankDetailsSchema>['body'];

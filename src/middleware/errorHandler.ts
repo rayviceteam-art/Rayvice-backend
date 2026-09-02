@@ -24,10 +24,23 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     message = err.message;
     details = err.details;
   } else if (err instanceof ZodError) {
+    const fieldErrors = err.flatten().fieldErrors;
+    const messages: string[] = [];
+    for (const [key, val] of Object.entries(fieldErrors)) {
+      if (val && val.length > 0) {
+        const cleanKey = key.replace(/^(body|query|params)\./, '');
+        const readableKey = cleanKey
+          .replace(/([A-Z])/g, ' $1')
+          .replace(/^./, (str) => str.toUpperCase())
+          .trim();
+        messages.push(`${readableKey}: ${val.join(', ')}`);
+      }
+    }
+    const friendlyMsg = messages.length > 0 ? messages.join(' • ') : 'Validation failed. Please verify your inputs.';
     statusCode = 422;
     errorCode = 'VALIDATION_ERROR';
-    message = 'Validation failed.';
-    details = err.flatten().fieldErrors;
+    message = friendlyMsg;
+    details = fieldErrors;
   } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
       statusCode = 409;
@@ -54,6 +67,6 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     success: false,
     message: isUnexpected && isProduction ? 'An unexpected error occurred.' : message,
     errorCode,
-    ...(details && !isProduction ? { details } : {}),
+    ...(details ? { errors: details, details } : {}),
   });
 }

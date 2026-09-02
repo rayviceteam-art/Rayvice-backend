@@ -22,7 +22,21 @@ export function validateRequest(schema: AnyZodObject) {
       next();
     } catch (error) {
       if (error instanceof ZodError) {
-        next(ApiError.validation('Validation failed.', error.flatten().fieldErrors));
+        const fieldErrors = error.flatten().fieldErrors;
+        const messages: string[] = [];
+        for (const [key, val] of Object.entries(fieldErrors)) {
+          if (val && val.length > 0) {
+            const cleanKey = key.replace(/^(body|query|params)\./, '');
+            const readableKey = cleanKey
+              .replace(/([A-Z])/g, ' $1')
+              .replace(/^./, (str) => str.toUpperCase())
+              .trim();
+            messages.push(`${readableKey}: ${val.join(', ')}`);
+          }
+        }
+        const friendlyMsg =
+          messages.length > 0 ? messages.join(' • ') : 'Validation failed. Please verify your inputs.';
+        next(ApiError.validation(friendlyMsg, fieldErrors));
         return;
       }
       next(error);
