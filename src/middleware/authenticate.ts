@@ -4,6 +4,7 @@ import { verifyAccessToken } from '../utils/jwt';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { prisma } from '../config/database';
+import { isUserSuperAdmin } from './authorize';
 
 export interface AuthenticatedUser {
   id: string;
@@ -73,10 +74,13 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     throw ApiError.forbidden('This business account has been suspended.', 'BUSINESS_SUSPENDED');
   }
 
+  const isSuperAdmin = isUserSuperAdmin(user);
+  const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+
   req.user = {
     id: user.id,
     businessId: user.businessId,
-    role: user.role,
+    role: effectiveRole,
     email: user.email,
   };
 

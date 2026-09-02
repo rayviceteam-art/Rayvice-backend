@@ -145,9 +145,11 @@ export async function registerBusiness(input: RegisterInput, meta: RequestMeta) 
 
   await sendEmailVerificationToken(user.id, user.email, user.firstName);
 
-  const tokens = await issueTokenPair(user.id, business.id, user.role, meta);
+  const isSuperAdmin = isUserSuperAdmin(user);
+  const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+  const tokens = await issueTokenPair(user.id, business.id, effectiveRole, meta);
 
-  return { business, user, tokens };
+  return { business, user: { ...user, role: effectiveRole }, tokens };
 }
 
 async function sendEmailVerificationToken(userId: string, email: string, firstName: string): Promise<void> {
@@ -295,7 +297,10 @@ export async function refreshSession(rawRefreshToken: string, meta: RequestMeta)
     throw ApiError.unauthorized('Account is no longer active.', 'ACCOUNT_INACTIVE');
   }
 
-  const tokens = await issueTokenPair(user.id, user.businessId, user.role, meta);
+  const isSuperAdmin = isUserSuperAdmin(user);
+  const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+
+  const tokens = await issueTokenPair(user.id, user.businessId, effectiveRole, meta);
   const newTokenHash = hashOpaqueToken(tokens.refreshToken);
 
   await prisma.refreshToken.update({
@@ -311,7 +316,7 @@ export async function refreshSession(rawRefreshToken: string, meta: RequestMeta)
     userAgent: meta.userAgent,
   });
 
-  return { tokens, businessId: user.businessId, role: user.role };
+  return { tokens, businessId: user.businessId, role: effectiveRole };
 }
 
 /**
