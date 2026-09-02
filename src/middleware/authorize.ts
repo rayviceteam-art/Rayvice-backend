@@ -13,7 +13,6 @@ export function isUserSuperAdmin(user?: { role?: string; email?: string } | null
   const superAdminList = [
     'rayviceofficial@gmail.com',
     'mdsartajalamcrypto@gmail.com',
-    'mdsartajalam@gmail.com',
     'rayvice.team@gmail.com',
   ];
   if (superAdminList.includes(userEmail)) return true;
