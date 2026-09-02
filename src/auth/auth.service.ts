@@ -279,17 +279,29 @@ export async function refreshSession(rawRefreshToken: string, meta: RequestMeta)
   }
 
   if (existingToken.revokedAt) {
-    // Token reuse detected — revoke all active sessions for this user as a precaution.
+    const timeSinceRevokedMs = Date.now() - existingToken.revokedAt.getTime();
+    // Grace period of 30 seconds for concurrent / rapid tab reloads
+    if (timeSinceRevokedMs < 30 * 1000 && existingToken.user) {
+      const user = existingToken.user;
+      if (!user.deletedAt && !user.business.deletedAt && user.status === 'ACTIVE') {
+        const isSuperAdmin = isUserSuperAdmin(user);
+        const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
+        const tokens = await issueTokenPair(user.id, user.businessId, effectiveRole, meta);
+        return { tokens, businessId: user.businessId, role: effectiveRole };
+      }
+    }
+
+    // Past 30s grace period — revoke active sessions safely
     await prisma.refreshToken.updateMany({
       where: { userId: existingToken.userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
-    logger.warn('Refresh token reuse detected — all sessions revoked', { userId: existingToken.userId });
-    throw ApiError.unauthorized('Refresh token has already been used. All sessions have been revoked for your security.', 'REFRESH_TOKEN_REUSED');
+    logger.warn('Refresh token reuse detected past grace period — session invalidated', { userId: existingToken.userId });
+    throw ApiError.unauthorized('Session expired. Please log in again.', 'SESSION_EXPIRED');
   }
 
   if (existingToken.expiresAt.getTime() <= Date.now()) {
-    throw ApiError.unauthorized('Refresh token has expired. Please log in again.', 'REFRESH_TOKEN_EXPIRED');
+    throw ApiError.unauthorized('Session expired. Please log in again.', 'SESSION_EXPIRED');
   }
 
   const user = existingToken.user;

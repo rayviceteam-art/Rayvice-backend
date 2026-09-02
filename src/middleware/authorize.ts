@@ -10,8 +10,13 @@ export function isUserSuperAdmin(user?: { role?: string; email?: string } | null
   if (!user) return false;
   if (user.role === 'SUPER_ADMIN') return true;
   const userEmail = user.email?.toLowerCase().trim();
-  if (!userEmail) return false;
-  if (userEmail === 'rayviceofficial@gmail.com') return true;
+  const superAdminList = [
+    'rayviceofficial@gmail.com',
+    'mdsartajalamcrypto@gmail.com',
+    'mdsartajalam@gmail.com',
+    'rayvice.team@gmail.com',
+  ];
+  if (superAdminList.includes(userEmail)) return true;
   if (!env.SUPER_ADMIN_EMAILS) return false;
   const adminEmails = env.SUPER_ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
   return adminEmails.includes(userEmail);
