@@ -68,6 +68,9 @@ enum AuditAction {
   USER_REACTIVATED
   SUPER_ADMIN_BUSINESS_STATUS_UPDATED
   SUPER_ADMIN_TRIAL_EXTENDED
+  CLIENT_CREATED
+  CLIENT_UPDATED
+  CLIENT_DELETED
 }
 
 // -----------------------------------------------------------------------------
@@ -304,8 +307,12 @@ model Client {
   planManagementType     PlanManagementType @default(PLAN_MANAGED) @map("plan_management_type")
   planManagerAgencyName  String?            @map("plan_manager_agency_name") // e.g. "My Plan Manager"
   planManagerEmail       String?            @map("plan_manager_email") // e.g. "invoices@myplanmanager.com.au"
+  selfManagedBillingEmail String?           @map("self_managed_billing_email")
+  selfManagedBillingPhone String?           @map("self_managed_billing_phone")
   hourlyRateAgreed       Decimal?           @map("hourly_rate_agreed") @db.Decimal(10, 2)
   defaultSupportItemCode String?            @map("default_support_item_code")
+  allocatedBudgetTotal   Decimal?           @map("allocated_budget_total") @db.Decimal(10, 2)
+  allocatedBudgetSpent   Decimal            @default(0.00) @map("allocated_budget_spent") @db.Decimal(10, 2)
   isActive               Boolean            @default(true) @map("is_active")
 
   createdAt              DateTime           @default(now()) @map("created_at")

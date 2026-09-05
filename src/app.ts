@@ -9,6 +9,7 @@ import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './auth/auth.routes';
 import businessRoutes from './business/business.routes';
 import adminRoutes from './admin/admin.routes';
+import clientRoutes from './clients/client.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -48,9 +49,11 @@ export function createApp(): Express {
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/business', businessRoutes);
   app.use('/api/v1/admin', adminRoutes);
+  app.use('/api/v1/clients', clientRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api/business', businessRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/clients', clientRoutes);
 
   // --- 404 + centralized error handling (BACKEND-01 §7) ---
   app.use(notFoundHandler);
