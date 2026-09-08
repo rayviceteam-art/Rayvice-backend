@@ -28,3 +28,26 @@ export const authRateLimiter = rateLimit({
   skipSuccessfulRequests: true,
   handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many attempts. Please try again later.')),
 });
+
+/**
+ * Login-specific rate limiter keyed by email+IP (composite).
+ * Using IP alone causes one IP's quota to block brute-force DB counter
+ * increments for different accounts, preventing account lockout from
+ * triggering. Email+IP ensures each account's lockout counter is
+ * independent, while still preventing credential-stuffing per IP+account.
+ * BACKEND-03 §14 — "Protect against brute-force attacks."
+ */
+export const loginRateLimiter = rateLimit({
+  windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+  max: env.AUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  // Composite key: IP + normalised email (falls back to IP-only if no body)
+  keyGenerator: (req) => {
+    const ip = req.ip ?? 'unknown';
+    const email = (req.body?.email ?? '').toString().toLowerCase().trim();
+    return email ? `${ip}:${email}` : ip;
+  },
+  handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many login attempts for this account. Please try again later.')),
+});
