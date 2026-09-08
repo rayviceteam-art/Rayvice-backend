@@ -15,7 +15,64 @@ const passwordSchema = z
   .regex(/[A-Z]/, 'Password must contain at least one uppercase letter.')
   .regex(/[0-9]/, 'Password must contain at least one number.');
 
-const emailSchema = z.string().trim().toLowerCase().email('A valid email address is required.');
+export const ALLOWED_EMAIL_DOMAINS = ['.com', '.com.au', '.net', '.org'] as const;
+
+export const DISPOSABLE_EMAIL_PATTERNS = [
+  'tempmail',
+  'mailnull',
+  '10minutemail',
+  'guerrillamail',
+  'yopmail',
+  'trashmail',
+  'throwawaymail',
+  'dispostable',
+  'burnermail',
+  'fakeinbox',
+  'sharklasers',
+  'getairmail',
+  'mohmal',
+  'temp-mail',
+  'generator',
+  'fakemail',
+  'crazymailing',
+  'disposable',
+] as const;
+
+export function isAllowedEmail(email: string): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim().toLowerCase();
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return false;
+
+  const domain = trimmed.slice(atIndex + 1);
+
+  // Must end with .com, .com.au, .net, or .org with a valid domain structure
+  const allowedTldRegex = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.(com|com\.au|net|org)$/;
+  if (!allowedTldRegex.test(domain)) {
+    return false;
+  }
+
+  // Reject disposable / temporary email domains
+  for (const pattern of DISPOSABLE_EMAIL_PATTERNS) {
+    if (domain.includes(pattern)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export const EMAIL_ALLOWED_DOMAIN_MESSAGE =
+  'Only email addresses ending in .com, .com.au, .net, or .org are allowed (disposable emails are not permitted).';
+
+const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email('A valid email address is required.')
+  .refine(isAllowedEmail, {
+    message: EMAIL_ALLOWED_DOMAIN_MESSAGE,
+  });
 
 export const registerSchema = z.object({
   body: z.object({

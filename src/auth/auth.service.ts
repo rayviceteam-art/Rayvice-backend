@@ -19,6 +19,8 @@ import {
   VerifyEmailInput,
   ChangePasswordInput,
   GoogleAuthInput,
+  isAllowedEmail,
+  EMAIL_ALLOWED_DOMAIN_MESSAGE,
 } from './auth.validators';
 
 // BACKEND-03 §14 — "Protect against brute-force attacks."
@@ -580,6 +582,10 @@ async function verifyGoogleToken(input: GoogleAuthInput): Promise<GoogleUserInfo
 
 export async function googleAuth(input: GoogleAuthInput, meta: RequestMeta) {
   const googleUser = await verifyGoogleToken(input);
+
+  if (!isAllowedEmail(googleUser.email)) {
+    throw ApiError.badRequest(EMAIL_ALLOWED_DOMAIN_MESSAGE, 'INVALID_EMAIL_DOMAIN');
+  }
 
   const existingUser = await prisma.user.findUnique({
     where: { email: googleUser.email },
