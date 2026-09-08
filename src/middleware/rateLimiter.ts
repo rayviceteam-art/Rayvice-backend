@@ -25,6 +25,6 @@ export const authRateLimiter = rateLimit({
   max: env.AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: false,
+  skipSuccessfulRequests: true,
   handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many attempts. Please try again later.')),
 });
