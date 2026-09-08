@@ -143,7 +143,15 @@ export async function registerBusiness(input: RegisterInput, meta: RequestMeta) 
     userAgent: meta.userAgent,
   });
 
-  await sendEmailVerificationToken(user.id, user.email, user.firstName);
+  try {
+    await sendEmailVerificationToken(user.id, user.email, user.firstName);
+  } catch (emailError) {
+    logger.warn('Failed to dispatch initial verification email during registration', {
+      userId: user.id,
+      email: user.email,
+      error: emailError instanceof Error ? emailError.message : emailError,
+    });
+  }
 
   const isSuperAdmin = isUserSuperAdmin(user);
   const effectiveRole = isSuperAdmin ? ('SUPER_ADMIN' as UserRole) : user.role;
@@ -377,7 +385,15 @@ export async function resendVerificationEmail(input: ResendVerificationInput): P
   // verified, to avoid leaking account existence (GLOBAL-RULES §9 security).
   if (!user || user.emailVerifiedAt || user.deletedAt) return;
 
-  await sendEmailVerificationToken(user.id, user.email, user.firstName);
+  try {
+    await sendEmailVerificationToken(user.id, user.email, user.firstName);
+  } catch (emailError) {
+    logger.warn('Failed to resend verification email', {
+      userId: user.id,
+      email: user.email,
+      error: emailError instanceof Error ? emailError.message : emailError,
+    });
+  }
 }
 
 /**
@@ -397,12 +413,20 @@ export async function forgotPassword(input: ForgotPasswordInput, meta: RequestMe
 
   const resetUrl = `${env.CLIENT_URL}/reset-password?token=${rawToken}`;
 
-  await sendEmail({
-    to: user.email,
-    subject: 'Reset your Rayvice password',
-    html: `<p>Hi ${user.firstName},</p><p>We received a request to reset your password. This link expires in ${env.PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes.</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you did not request this, you can safely ignore this email.</p>`,
-    text: `Reset your password: ${resetUrl} (expires in ${env.PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes)`,
-  });
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: 'Reset your Rayvice password',
+      html: `<p>Hi ${user.firstName},</p><p>We received a request to reset your password. This link expires in ${env.PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes.</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you did not request this, you can safely ignore this email.</p>`,
+      text: `Reset your password: ${resetUrl} (expires in ${env.PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes)`,
+    });
+  } catch (emailError) {
+    logger.warn('Failed to dispatch password reset email', {
+      userId: user.id,
+      email: user.email,
+      error: emailError instanceof Error ? emailError.message : emailError,
+    });
+  }
 
   await recordAuditEvent({
     action: 'PASSWORD_RESET_REQUESTED',
