@@ -313,9 +313,15 @@ export async function updateBusinessProfile(
         throw ApiError.badRequest(bsbCheck.error || 'Invalid BSB code.', 'INVALID_BSB');
       }
       updateData.bsb = bsbCheck.formatted;
-      // Auto-set bankName if not provided and not currently set
-      if (!input.bankName && bsbCheck.bankName) {
-        updateData.bankName = bsbCheck.bankName;
+      // Auto-set bankName if not provided and not currently set in database
+      if (input.bankName === undefined && bsbCheck.bankName) {
+        const existing = await prisma.business.findUnique({
+          where: { id: businessId },
+          select: { bankName: true },
+        });
+        if (!existing?.bankName) {
+          updateData.bankName = bsbCheck.bankName;
+        }
       }
     }
   }
