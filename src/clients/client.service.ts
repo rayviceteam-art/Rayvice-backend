@@ -104,6 +104,9 @@ export async function createClient(input: CreateClientInput, ctx: ClientContext)
 
   return {
     ...client,
+    hourlyRateAgreed: client.hourlyRateAgreed !== null ? Number(client.hourlyRateAgreed) : null,
+    allocatedBudgetTotal: client.allocatedBudgetTotal !== null ? Number(client.allocatedBudgetTotal) : null,
+    allocatedBudgetSpent: Number(client.allocatedBudgetSpent),
     budgetUtilizationPercent: calculateBudgetUtilization(client.allocatedBudgetTotal, client.allocatedBudgetSpent),
   };
 }
@@ -174,6 +177,9 @@ export async function listClients(businessId: string, query: ListClientsQuery) {
 
   const transformedItems = items.map((client) => ({
     ...client,
+    hourlyRateAgreed: client.hourlyRateAgreed !== null ? Number(client.hourlyRateAgreed) : null,
+    allocatedBudgetTotal: client.allocatedBudgetTotal !== null ? Number(client.allocatedBudgetTotal) : null,
+    allocatedBudgetSpent: Number(client.allocatedBudgetSpent),
     pendingUninvoicedShiftsCount: pendingMap.get(client.id) ?? 0,
     budgetUtilizationPercent: calculateBudgetUtilization(client.allocatedBudgetTotal, client.allocatedBudgetSpent),
   }));
@@ -214,8 +220,20 @@ export async function getClientById(id: string, businessId: string) {
     throw ApiError.notFound("Participant not found.");
   }
 
+  const pendingUninvoicedShiftsCount = await prisma.shift.count({
+    where: {
+      businessId,
+      clientId: id,
+      isInvoiced: false,
+    },
+  });
+
   return {
     ...client,
+    hourlyRateAgreed: client.hourlyRateAgreed !== null ? Number(client.hourlyRateAgreed) : null,
+    allocatedBudgetTotal: client.allocatedBudgetTotal !== null ? Number(client.allocatedBudgetTotal) : null,
+    allocatedBudgetSpent: Number(client.allocatedBudgetSpent),
+    pendingUninvoicedShiftsCount,
     budgetUtilizationPercent: calculateBudgetUtilization(client.allocatedBudgetTotal, client.allocatedBudgetSpent),
   };
 }
@@ -303,6 +321,9 @@ export async function updateClient(id: string, input: UpdateClientInput, ctx: Cl
 
   return {
     ...updated,
+    hourlyRateAgreed: updated.hourlyRateAgreed !== null ? Number(updated.hourlyRateAgreed) : null,
+    allocatedBudgetTotal: updated.allocatedBudgetTotal !== null ? Number(updated.allocatedBudgetTotal) : null,
+    allocatedBudgetSpent: Number(updated.allocatedBudgetSpent),
     budgetUtilizationPercent: calculateBudgetUtilization(updated.allocatedBudgetTotal, updated.allocatedBudgetSpent),
   };
 }
