@@ -1,7 +1,7 @@
 {
   "name": "rayvice-backend",
   "version": "1.0.0",
-  "description": "Rayvice — NDIS Sole-Trader Billing & Compliance OS Backend",
+  "description": "Rayvice \u2014 NDIS Sole-Trader Billing & Compliance OS Backend",
   "main": "dist/server.js",
   "private": true,
   "engines": {
@@ -18,7 +18,8 @@
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "db:seed": "tsx prisma/seed.ts"
   },
   "keywords": [
     "rayvice",
@@ -62,5 +63,8 @@
     "@typescript-eslint/parser": "^8.14.0",
     "eslint": "^8.57.1",
     "prettier": "^3.3.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }

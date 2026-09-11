@@ -3,8 +3,16 @@ import type { Server } from 'http';
 import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './config/logger';
+import { ensureSupportCatalogueSeeded } from './config/seedCatalogue';
 
 const app = createApp();
+
+// Idempotent NDIS support catalogue upsert (Module 3/4 rate source).
+ensureSupportCatalogueSeeded().catch((err) => {
+  logger.error('Failed to seed NDIS support catalogue at startup', {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 const server: Server = app.listen(env.PORT, () => {
   logger.info(`Rayvice API listening on port ${env.PORT}`, {
