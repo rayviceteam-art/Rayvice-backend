@@ -23,10 +23,12 @@ export function validateRequest(schema: AnyZodObject) {
     } catch (error) {
       if (error instanceof ZodError) {
         const fieldErrors = error.flatten().fieldErrors;
+        const cleanedFieldErrors: Record<string, string[]> = {};
         const messages: string[] = [];
         for (const [key, val] of Object.entries(fieldErrors)) {
           if (val && val.length > 0) {
             const cleanKey = key.replace(/^(body|query|params)\./, '');
+            cleanedFieldErrors[cleanKey] = val;
             const readableKey = cleanKey
               .replace(/([A-Z])/g, ' $1')
               .replace(/^./, (str) => str.toUpperCase())
@@ -36,7 +38,7 @@ export function validateRequest(schema: AnyZodObject) {
         }
         const friendlyMsg =
           messages.length > 0 ? messages.join(' • ') : 'Validation failed. Please verify your inputs.';
-        next(ApiError.validation(friendlyMsg, fieldErrors));
+        next(ApiError.validation(friendlyMsg, cleanedFieldErrors));
         return;
       }
       next(error);

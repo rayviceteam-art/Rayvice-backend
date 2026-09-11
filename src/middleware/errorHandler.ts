@@ -25,10 +25,12 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     details = err.details;
   } else if (err instanceof ZodError) {
     const fieldErrors = err.flatten().fieldErrors;
+    const cleanedFieldErrors: Record<string, string[]> = {};
     const messages: string[] = [];
     for (const [key, val] of Object.entries(fieldErrors)) {
       if (val && val.length > 0) {
         const cleanKey = key.replace(/^(body|query|params)\./, '');
+        cleanedFieldErrors[cleanKey] = val;
         const readableKey = cleanKey
           .replace(/([A-Z])/g, ' $1')
           .replace(/^./, (str) => str.toUpperCase())
@@ -40,7 +42,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     statusCode = 422;
     errorCode = 'VALIDATION_ERROR';
     message = friendlyMsg;
-    details = fieldErrors;
+    details = cleanedFieldErrors;
   } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
       statusCode = 409;
