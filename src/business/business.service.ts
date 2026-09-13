@@ -63,6 +63,27 @@ const businessProfileSelect = {
  * Invites a new Office Manager or Technician into the acting Owner's business.
  * BACKEND-03 §3 — "Team Management" is an Owner-only permission.
  */
+// ---------------------------------------------------------------------------
+// Module 4 — business timezone (MODULE_4_BACKEND_SPECIFICATION §5.2)
+// Every NDIS rate-tier decision (weekday/weekend/evening/holiday) is made in
+// the business's local timezone, so it must track the business's state.
+// ---------------------------------------------------------------------------
+const STATE_TIMEZONE: Record<string, string> = {
+  NSW: 'Australia/Sydney',
+  ACT: 'Australia/Sydney',
+  VIC: 'Australia/Melbourne',
+  TAS: 'Australia/Hobart',
+  QLD: 'Australia/Brisbane',
+  SA: 'Australia/Adelaide',
+  WA: 'Australia/Perth',
+  NT: 'Australia/Darwin',
+};
+
+export function timezoneForState(state: string | null | undefined): string {
+  if (!state) return 'Australia/Sydney';
+  return STATE_TIMEZONE[state.trim().toUpperCase()] ?? 'Australia/Sydney';
+}
+
 export async function inviteTeamMember(businessId: string, input: InviteTeamMemberInput, meta: RequestMeta) {
   await assertCanMutate(businessId);
 
@@ -344,7 +365,11 @@ export async function updateBusinessProfile(
   if (input.isGstRegistered !== undefined) updateData.isGstRegistered = input.isGstRegistered;
   if (input.address !== undefined) updateData.address = input.address;
   if (input.suburb !== undefined) updateData.suburb = input.suburb;
-  if (input.state !== undefined) updateData.state = input.state;
+  if (input.state !== undefined) {
+    updateData.state = input.state;
+    // Module 4 — keep the rate-tier timezone in sync with the state
+    updateData.timezone = timezoneForState(input.state);
+  }
   if (input.postcode !== undefined) updateData.postcode = input.postcode;
 
   const updatedBusiness = await prisma.business.update({

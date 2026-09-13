@@ -48,6 +48,38 @@ enum BusinessStatus {
   SUSPENDED
 }
 
+/// Module 4 — subscription tier; gates Voice AI (Starter = manual logging only)
+enum PlanTier {
+  TRIAL
+  STARTER
+  PRO
+}
+
+/// Module 4 — lifecycle of a logged shift
+enum ShiftStatus {
+  PENDING
+  INVOICED
+  CANCELLED
+}
+
+/// Module 4 — NDIS rate tier of a claim line
+enum RateTier {
+  DAY
+  EVENING
+  SATURDAY
+  SUNDAY
+  HOLIDAY
+  TRAVEL
+}
+
+/// Module 4 — how the public-holiday decision was reached
+enum RateSource {
+  AUTO
+  MANUAL
+  NOT_HOLIDAY
+}
+
+
 /// Categorized audit event types for consistent, queryable audit logs.
 enum AuditAction {
   BUSINESS_REGISTERED
@@ -71,6 +103,10 @@ enum AuditAction {
   CLIENT_CREATED
   CLIENT_UPDATED
   CLIENT_DELETED
+  SHIFT_LOGGED
+  SHIFT_UPDATED
+  SHIFT_DELETED
+  SHIFT_VOICE_PARSED
 }
 
 // -----------------------------------------------------------------------------
@@ -99,6 +135,10 @@ model Business {
   postcode        String?
 
   status BusinessStatus @default(TRIALING)
+
+  // --- Module 4: rate-tier correctness + voice gating ---
+  timezone String   @default("Australia/Sydney")
+  planTier PlanTier @default(TRIAL)
 
   // --- Trial Policy (GLOBAL-RULES §2) ---
   trialStartedAt DateTime  @default(now())
@@ -346,6 +386,21 @@ model Shift {
   caseNotes      String?   @map("case_notes") @db.Text
   isInvoiced     Boolean   @default(false) @map("is_invoiced")
   invoiceId      String?   @map("invoice_id")
+  // --- Module 4: deterministic NDIS split engine ---
+  status            ShiftStatus @default(PENDING) @map("status")
+  supportItemCode   String?     @map("support_item_code")
+  startAt           DateTime?   @map("start_at")
+  endAt             DateTime?   @map("end_at")
+  timezoneUsed      String?     @map("timezone_used")
+  totalAmount       Decimal?    @map("total_amount") @db.Decimal(10, 2)
+  hourlyRateApplied Decimal?    @map("hourly_rate_applied") @db.Decimal(10, 2)
+  isPublicHoliday   Boolean     @default(false) @map("is_public_holiday")
+  publicHolidayName String?     @map("public_holiday_name")
+  holidaySource     RateSource? @map("holiday_source")
+  calculatedAt      DateTime?   @map("calculated_at")
+  idempotencyKey    String?     @map("idempotency_key")
+  cancelledAt       DateTime?   @map("cancelled_at")
+
 
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
@@ -354,9 +409,14 @@ model Shift {
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
   invoice        Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  lineItems ShiftLineItem[]
 
   @@index([businessId, isInvoiced])
   @@index([clientId])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, status])
+  @@index([businessId, shiftDate])
+  @@index([userId, startAt])
   @@map("shifts")
 }
 
@@ -415,4 +475,32 @@ model InvoiceLineItem {
 
   @@index([invoiceId])
   @@map("invoice_line_items")
+}
+
+/// Module 4 — one row per claimable component of a shift. ndisCapRate and
+/// appliedRate are SNAPSHOTS: historical shifts must never be recomputed when
+/// the annual NDIS price guide changes.
+model ShiftLineItem {
+  id              String    @id @default(uuid())
+  shiftId         String    @map("shift_id")
+  businessId      String    @map("business_id") // tenant scope
+  rateTier        RateTier  @map("rate_tier")
+  supportItemCode String    @map("support_item_code")
+  description     String
+  quantity        Decimal   @db.Decimal(10, 2) // hours or kilometres
+  unit            String    @default("Hour") // "Hour" | "KM"
+  ndisCapRate     Decimal   @map("ndis_cap_rate") @db.Decimal(10, 2)
+  appliedRate     Decimal   @map("applied_rate") @db.Decimal(10, 2)
+  amount          Decimal   @db.Decimal(10, 2)
+  segmentStart    DateTime? @map("segment_start")
+  segmentEnd      DateTime? @map("segment_end")
+  sortOrder       Int       @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+  @@index([businessId])
+  @@map("shift_line_items")
 }

@@ -29,6 +29,15 @@ const envSchema = z.object({
 
   TRIAL_DURATION_HOURS: z.coerce.number().int().positive().default(216),
 
+  // --- Module 4: voice AI (Section 16). Optional: the server boots without
+  // them and only POST /shifts/voice-parse returns 503 VOICE_UNAVAILABLE. ---
+  GROQ_API_KEY: z.string().optional().default(''),
+  GEMINI_API_KEY: z.string().optional().default(''),
+  GEMINI_MODEL: z.string().optional().default('gemini-2.5-flash'),
+  VOICE_MAX_FILE_MB: z.coerce.number().int().positive().default(5),
+  VOICE_MAX_SECONDS: z.coerce.number().int().positive().default(60),
+  VOICE_DAILY_LIMIT_PER_USER: z.coerce.number().int().positive().default(30),
+
   SMTP_HOST: z.string().optional().default(''),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_SECURE: z

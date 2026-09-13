@@ -100,7 +100,7 @@ export async function assertCanMutate(businessId: string): Promise<void> {
  */
 export async function checkTrialResourceLimit(
   businessId: string,
-  resourceType: 'clients' | 'shifts' | 'invoices'
+  resourceType: 'clients' | 'shifts' | 'invoices' | 'voice'
 ): Promise<void> {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
@@ -143,6 +143,17 @@ export async function checkTrialResourceLimit(
       throw ApiError.forbidden(
         `Free trial limit of ${TRIAL_LIMITS.MAX_SHIFTS} shifts reached. Subscribe to log unlimited shifts.`,
         'TRIAL_SHIFT_LIMIT_REACHED'
+      );
+    }
+  } else if (resourceType === 'voice') {
+    // Counted from the audit log so deleting shifts can never reset voice usage.
+    const usage = await prisma.auditLog.count({
+      where: { businessId, action: 'SHIFT_VOICE_PARSED' },
+    });
+    if (usage >= TRIAL_LIMITS.MAX_VOICE_TRANSCRIPTIONS) {
+      throw ApiError.forbidden(
+        `Free trial is limited to ${TRIAL_LIMITS.MAX_VOICE_TRANSCRIPTIONS} voice transcriptions. Upgrade to Pro for unlimited voice AI.`,
+        'TRIAL_VOICE_LIMIT_REACHED'
       );
     }
   } else if (resourceType === 'invoices') {

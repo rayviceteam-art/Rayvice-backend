@@ -367,3 +367,43 @@ export async function softDeleteClient(id: string, ctx: ClientContext) {
 
   return deactivated;
 }
+
+// ---------------------------------------------------------------------------
+// Module 4 — budget tracking integration (MODULE_4_BACKEND_SPECIFICATION §9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Recomputes (never increments) Client.allocatedBudgetSpent as the sum of
+ * `totalAmount` across that client's non-cancelled shifts, regardless of
+ * invoiced status. Idempotent and drift-proof — called immediately after every
+ * shift create / update / cancel transaction commits.
+ */
+export async function recalculateClientBudgetSpent(
+  clientId: string,
+  businessId: string
+): Promise<Prisma.Decimal> {
+  const agg = await prisma.shift.aggregate({
+    where: { businessId, clientId, status: { not: 'CANCELLED' } },
+    _sum: { totalAmount: true },
+  });
+  const spent = agg._sum.totalAmount ?? new Prisma.Decimal(0);
+
+  await prisma.client.update({
+    where: { id: clientId },
+    data: { allocatedBudgetSpent: spent },
+  });
+
+  return spent;
+}
+
+/** Budget utilisation level used by shift responses and the dashboard. */
+export function budgetLevel(
+  spent: Prisma.Decimal,
+  total: Prisma.Decimal | null
+): 'OK' | 'WARNING' | 'EXHAUSTED' {
+  if (!total || total.isZero()) return 'OK';
+  const pct = spent.dividedBy(total).times(100);
+  if (pct.greaterThanOrEqualTo(100)) return 'EXHAUSTED';
+  if (pct.greaterThanOrEqualTo(70)) return 'WARNING';
+  return 'OK';
+}
