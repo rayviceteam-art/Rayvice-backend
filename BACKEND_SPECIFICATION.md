@@ -60,8 +60,8 @@ graph TD
 | :--- | :--- | :--- | :--- | :--- |
 | **Module 1** | ✅ **DONE** | **Auth & Tenant Foundation** | Multi-tenant user registration, secure session tokens, brute-force lockout, Google OAuth, 9-day trial. | `/api/v1/auth/*` |
 | **Module 2** | ✅ **DONE** | **Business Profile & Bank Details** | Australian ABN (ATO Modulo-89), BSB (`XXX-XXX`), Bank Account, custom invoice prefixes, GST & Pre-Flight compliance check. | `/api/v1/business/profile`, `/api/v1/business/bank-details`, `/api/v1/business/compliance-status` |
-| **Module 3** | 🔨 **TODO** | **NDIS Participant Directory** | 9-digit NDIS validation, Plan Management routing (Plan-Managed vs Self-Managed), budget caps. | `/api/v1/clients/*` |
-| **Module 4** | 🔨 **TODO** | **Shift Logging & Auto-Split Engine** | Voice/Text shift intake, 8:00 PM evening rate threshold split, weekend/holiday rates, travel km math. | `/api/v1/shifts/*`, `/api/v1/shifts/voice-parse` |
+| **Module 3** | ✅ **DONE** | **NDIS Participant Directory** | 9-digit NDIS validation, Plan Management routing (Plan-Managed vs Self-Managed), budget caps, NDIS catalogue seeding. | `/api/v1/clients/*` |
+| **Module 4** | 📋 **SPEC READY** | **Shift Logging & Auto-Split Engine** | Voice/Text shift intake, 8:00 PM evening rate threshold split, overnight midnight split, DST-aware timezone rating, weekend/holiday rates, travel km math, budget tracking, dashboard summary. See `MODULE_4_BACKEND_SPECIFICATION.md`. | `/api/v1/shifts/*`, `/api/v1/shifts/voice-parse`, `/api/v1/dashboard/summary` |
 | **Module 5** | 🔨 **TODO** | **Invoicing, Shield & Dispatch** | Pre-Flight Auto-Rejection Shield, compliant PDF generation, direct Plan Manager email delivery, Stripe gating. | `/api/v1/invoices/*`, `/api/v1/invoices/generate` |
 
 ---
@@ -131,6 +131,33 @@ enum BusinessStatus {
   SUSPENDED
 }
 
+enum PlanTier {
+  TRIAL   // 9-day free trial (default)
+  STARTER // $24 AUD / month — manual shift logging only
+  PRO     // $44 AUD / month — unlocks unlimited Voice AI
+}
+
+enum ShiftStatus {
+  PENDING   // logged, not yet invoiced (default)
+  INVOICED  // attached to an invoice — immutable
+  CANCELLED // voided by the worker (soft cancel, row is kept for audit)
+}
+
+enum RateTier {
+  DAY
+  EVENING
+  SATURDAY
+  SUNDAY
+  HOLIDAY
+  TRAVEL
+}
+
+enum RateSource {
+  AUTO        // holiday detected automatically from the state holiday calendar
+  MANUAL      // worker explicitly marked the day as a public holiday
+  NOT_HOLIDAY // worker explicitly marked the day as NOT a holiday
+}
+
 enum AuditAction {
   BUSINESS_REGISTERED
   USER_INVITED
@@ -150,7 +177,9 @@ enum AuditAction {
   CLIENT_UPDATED
   CLIENT_DELETED
   SHIFT_LOGGED
+  SHIFT_UPDATED
   SHIFT_DELETED
+  SHIFT_VOICE_PARSED
   INVOICE_GENERATED
   INVOICE_SENT
   INVOICE_PAID
@@ -190,6 +219,9 @@ model Business {
   isGstRegistered Boolean      @default(false)
 
   status        BusinessStatus @default(TRIALING)
+  planTier      PlanTier       @default(TRIAL) // Module 4/5 — gates Voice AI
+  timezone      String         @default("Australia/Sydney") // Module 4 — rate tier correctness
+  state         String?        // e.g. "NSW" — drives public holiday calendar
   trialStartedAt DateTime      @default(now())
   trialEndsAt   DateTime
   hasUsedTrial  Boolean        @default(true)
@@ -375,31 +407,81 @@ model Client {
 // Module 4: Shift Logging & Auto-Splitting
 // -----------------------------------------------------------------------------
 model Shift {
-  id             String    @id @default(uuid())
-  businessId     String    @map("business_id")
-  userId         String    @map("user_id")
-  clientId       String    @map("client_id")
-  shiftDate      DateTime  @map("shift_date") @db.Date
-  startTime      String    @map("start_time") // "18:00"
-  endTime        String    @map("end_time") // "21:30"
-  totalHours     Decimal   @map("total_hours") @db.Decimal(5, 2)
-  travelKms      Decimal   @default(0.0) @map("travel_kms") @db.Decimal(6, 2)
-  travelMinutes  Int       @default(0) @map("travel_minutes")
-  caseNotes      String?   @map("case_notes") @db.Text
-  isInvoiced     Boolean   @default(false) @map("is_invoiced")
-  invoiceId      String?   @map("invoice_id")
+  id                 String      @id @default(uuid())
+  businessId         String      @map("business_id")
+  userId             String      @map("user_id")
+  clientId           String      @map("client_id")
+  shiftDate          DateTime    @map("shift_date") @db.Date
+  startTime          String      @map("start_time") // "18:00" local business time
+  endTime            String      @map("end_time") // "21:30" local; may be earlier than start (overnight)
+  totalHours         Decimal     @map("total_hours") @db.Decimal(5, 2)
+  travelKms          Decimal     @default(0.0) @map("travel_kms") @db.Decimal(6, 2)
+  travelMinutes      Int         @default(0) @map("travel_minutes")
+  caseNotes          String?     @map("case_notes") @db.Text
+  status             ShiftStatus @default(PENDING) // Module 4 — primary state
+  isInvoiced         Boolean     @default(false) @map("is_invoiced") // kept in sync with status = INVOICED
+  invoiceId          String?     @map("invoice_id")
 
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  // Module 4 — calculation audit trail
+  startAt            DateTime?   @map("start_at") // absolute UTC instant
+  endAt              DateTime?   @map("end_at") // absolute UTC instant (may be next day)
+  timezoneUsed       String?     @map("timezone_used") // e.g. "Australia/Sydney"
+  totalAmount        Decimal?    @map("total_amount") @db.Decimal(10, 2) // sum of rounded line amounts
+  hourlyRateApplied  Decimal?    @map("hourly_rate_applied") @db.Decimal(10, 2) // effective time rate
+  isPublicHoliday    Boolean     @default(false) @map("is_public_holiday")
+  publicHolidayName  String?     @map("public_holiday_name") // e.g. "Christmas Day"
+  holidaySource      RateSource? @map("holiday_source")
+  calculatedAt       DateTime?   @map("calculated_at")
+  idempotencyKey     String?     @map("idempotency_key") // double-submit guard, unique per business
+  cancelledAt        DateTime?   @map("cancelled_at")
 
-  business       Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  invoice        Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  createdAt          DateTime    @default(now()) @map("created_at")
+  updatedAt          DateTime    @updatedAt @map("updated_at")
 
+  business           Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client             Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  invoice            Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  lineItems          ShiftLineItem[]
+
+  @@unique([businessId, idempotencyKey])
   @@index([businessId, isInvoiced])
+  @@index([businessId, status])
+  @@index([businessId, shiftDate])
+  @@index([userId, startAt])
   @@index([clientId])
   @@map("shifts")
+}
+
+// -----------------------------------------------------------------------------
+// Module 4: Deterministic NDIS rate-split line items
+// One row per claimable component of a shift (day / evening / weekend / holiday / travel).
+// `appliedRate` and `ndisCapRate` are SNAPSHOTS: historical shifts must never be
+// recalculated when the annual NDIS price guide changes.
+// -----------------------------------------------------------------------------
+model ShiftLineItem {
+  id              String    @id @default(uuid())
+  shiftId         String    @map("shift_id")
+  businessId      String    @map("business_id") // tenant scope
+  rateTier        RateTier  @map("rate_tier")
+  supportItemCode String    @map("support_item_code") // e.g. "01_011_0107_1_1"
+  description     String
+  quantity        Decimal   @db.Decimal(10, 2) // hours or kilometres
+  unit            String    @default("Hour") // "Hour" | "KM"
+  ndisCapRate     Decimal   @map("ndis_cap_rate") @db.Decimal(10, 2)
+  appliedRate     Decimal   @map("applied_rate") @db.Decimal(10, 2) // snapshot — never recomputed
+  amount          Decimal   @db.Decimal(10, 2)
+  segmentStart    DateTime? @map("segment_start")
+  segmentEnd      DateTime? @map("segment_end")
+  sortOrder       Int       @default(0) @map("sort_order")
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  shift           Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+  @@index([businessId])
+  @@map("shift_line_items")
 }
 
 // -----------------------------------------------------------------------------
@@ -597,166 +679,178 @@ Plan managers instantly reject claims if the participant's **9-digit NDIS number
 
 ### 📌 MODULE 4: SHIFT LOGGING & DETERMINISTIC NDIS AUTO-SPLIT ENGINE
 
+> **FULL IMPLEMENTATION CONTRACT:** `MODULE_4_BACKEND_SPECIFICATION.md` (repository root) is the binding, line-by-line implementation document for this module — engine algorithm, every API contract, error codes, test matrix, permissions matrix and acceptance criteria. This section is the authoritative summary; where the two differ, the dedicated document wins. **No feature may be added that is not described in either document.**
+
 #### 4.1 Problem & Business Purpose
-The **NDIS Price Guide (2026 Limits)** mandates strict time-split rules based on shift hours:
-- **Weekday Daytime (06:00 – 20:00):** Item `01_011_0107_1_1` (Cap: **$67.56/hr**).
-- **Weekday Evening (After 20:00 / 8:00 PM):** Item `01_015_0107_1_1` (Cap: **$74.42/hr**).
-- **Saturday:** Item `01_014_0107_1_1` (Cap: **$95.07/hr**).
-- **Sunday:** Item `01_013_0107_1_1` (Cap: **$122.59/hr**).
-- **Public Holiday:** Item `01_012_0107_1_1` (Cap: **$150.12/hr**).
-- **Activity-Based Transport:** Item `01_799_0107_1_1` (**$0.97/km**).
+The NDIS Price Guide pays **different rates depending on when support was delivered**, so a single shift is routinely split across several claim lines. Doing that in Excel takes ~5 hours per week and produces invoices that plan managers reject, delaying payment 3–6 weeks.
 
-If a support worker logs a shift from **18:00 to 21:30 (3.5 hours)**:
-- 18:00 to 20:00 (2.0 hrs) = $67.56 × 2 = **$135.12**
-- 20:00 to 21:30 (1.5 hrs) = $74.42 × 1.5 = **$111.63**
-- 12 km Transport = $0.97 × 12 = **$11.64**
-- **Total Shift Claim = $258.39 AUD**
+**Module 4 removes that work:** it converts a logged shift (typed or spoken) into exact, NDIS-capped, reproducible claim line items in milliseconds, and it is the data source for Module 5 invoicing and for the dashboard.
 
-Manually calculating this in Excel takes 5 hours a week and causes rejections. Rayvice automates this split instantly in milliseconds.
+**Determinism guarantee:** the calculation path contains **no AI**. AI is used only to transcribe/structure voice input, and that result must be human-confirmed before saving.
 
-#### 4.2 Deterministic Calculation Engine Implementation (`src/shifts/shift.engine.ts`)
+#### 4.2 NDIS Rate Tiers (2026 Price Guide)
 
-```typescript
-export interface ShiftCalculationInput {
-  date: string; // "YYYY-MM-DD"
-  startTime: string; // "18:00" (24h format)
-  endTime: string; // "21:30" (24h format)
-  travelKms?: number;
-  isPublicHoliday?: boolean;
-}
+| Tier | When it applies (business local time) | Support Item Code | Rate source (`NdisSupportItem`) |
+| :--- | :--- | :--- | :--- |
+| `DAY` | Weekday (Mon–Fri) 00:00 → 20:00 | `01_011_0107_1_1` | `nationalWeekdayRate` |
+| `EVENING` | Weekday (Mon–Fri) 20:00 → midnight | `01_015_0107_1_1` | `nationalEveningRate` |
+| `SATURDAY` | Any time Saturday | `01_014_0107_1_1` | `nationalSaturdayRate` |
+| `SUNDAY` | Any time Sunday | `01_013_0107_1_1` | `nationalSundayRate` |
+| `HOLIDAY` | Any time on a public holiday | `01_012_0107_1_1` | `nationalHolidayRate` |
+| `TRAVEL` | Activity-based transport (per km) | `01_799_0107_1_1` | `nationalWeekdayRate` (unit `KM`) |
 
-export interface CalculatedItem {
-  supportItemCode: string;
-  description: string;
-  quantity: number; // hours or kms
-  unitPrice: number;
-  total: number;
-}
+**Rules:**
+1. Rates are **never hardcoded** — all six rows exist in the seeded `NdisSupportItem` catalogue. A missing row fails with `500 SUPPORT_CATALOGUE_INCOMPLETE`.
+2. **Tier priority:** `HOLIDAY` > `SUNDAY` > `SATURDAY` > weekday (`DAY`/`EVENING`); `TRAVEL` is always added on top.
+3. **`EVENING_THRESHOLD = 20:00` local.** Ends ≤ 20:00 → all `DAY`; starts ≥ 20:00 → all `EVENING`; straddling → split at 20:00.
+4. **Early-morning rule:** weekday 00:00–06:00 bills at the `DAY` rate (no separate night tier in v1).
+5. **Overnight rule:** shifts crossing midnight split at local `00:00`; each segment is rated using its own day's tier (Friday 22:00 → Saturday 01:00 = 2.00 h `EVENING` + 1.00 h `SATURDAY`).
 
-export function calculateNdisShiftSplit(
-  input: ShiftCalculationInput,
-  rates: {
-    weekdayDayRate: number; // 67.56
-    weekdayEveningRate: number; // 74.42
-    saturdayRate: number; // 95.07
-    sundayRate: number; // 122.59
-    holidayRate: number; // 150.12
-    travelKmRate: number; // 0.97
-  }
-): CalculatedItem[] {
-  const items: CalculatedItem[] = [];
-  const shiftDate = new Date(input.date);
-  const dayOfWeek = shiftDate.getUTCDay(); // 0 = Sunday, 6 = Saturday
-
-  const [startH, startM] = input.startTime.split(':').map(Number);
-  const [endH, endM] = input.endTime.split(':').map(Number);
-  const startDecimal = startH + startM / 60;
-  const endDecimal = endH + endM / 60;
-  const totalHours = Number((endDecimal - startDecimal).toFixed(2));
-
-  if (totalHours <= 0) {
-    throw new Error('Shift end time must be after start time.');
-  }
-
-  // 1. PUBLIC HOLIDAY
-  if (input.isPublicHoliday) {
-    items.push({
-      supportItemCode: '01_012_0107_1_1',
-      description: `Public Holiday Assistance (${input.startTime} - ${input.endTime})`,
-      quantity: totalHours,
-      unitPrice: rates.holidayRate,
-      total: Number((totalHours * rates.holidayRate).toFixed(2)),
-    });
-  } 
-  // 2. SUNDAY
-  else if (dayOfWeek === 0) {
-    items.push({
-      supportItemCode: '01_013_0107_1_1',
-      description: `Sunday Assistance (${input.startTime} - ${input.endTime})`,
-      quantity: totalHours,
-      unitPrice: rates.sundayRate,
-      total: Number((totalHours * rates.sundayRate).toFixed(2)),
-    });
-  } 
-  // 3. SATURDAY
-  else if (dayOfWeek === 6) {
-    items.push({
-      supportItemCode: '01_014_0107_1_1',
-      description: `Saturday Assistance (${input.startTime} - ${input.endTime})`,
-      quantity: totalHours,
-      unitPrice: rates.saturdayRate,
-      total: Number((totalHours * rates.saturdayRate).toFixed(2)),
-    });
-  } 
-  // 4. WEEKDAY (Split at 20:00 / 8:00 PM)
-  else {
-    const EVENING_THRESHOLD = 20.0;
-
-    if (endDecimal <= EVENING_THRESHOLD) {
-      items.push({
-        supportItemCode: '01_011_0107_1_1',
-        description: `Weekday Daytime Support (${input.startTime} - ${input.endTime})`,
-        quantity: totalHours,
-        unitPrice: rates.weekdayDayRate,
-        total: Number((totalHours * rates.weekdayDayRate).toFixed(2)),
-      });
-    } else if (startDecimal >= EVENING_THRESHOLD) {
-      items.push({
-        supportItemCode: '01_015_0107_1_1',
-        description: `Weekday Evening Support (${input.startTime} - ${input.endTime})`,
-        quantity: totalHours,
-        unitPrice: rates.weekdayEveningRate,
-        total: Number((totalHours * rates.weekdayEveningRate).toFixed(2)),
-      });
-    } else {
-      const dayHours = Number((EVENING_THRESHOLD - startDecimal).toFixed(2));
-      const eveningHours = Number((endDecimal - EVENING_THRESHOLD).toFixed(2));
-
-      items.push({
-        supportItemCode: '01_011_0107_1_1',
-        description: `Weekday Daytime Support (${input.startTime} - 20:00)`,
-        quantity: dayHours,
-        unitPrice: rates.weekdayDayRate,
-        total: Number((dayHours * rates.weekdayDayRate).toFixed(2)),
-      });
-      items.push({
-        supportItemCode: '01_015_0107_1_1',
-        description: `Weekday Evening Support (20:00 - ${input.endTime})`,
-        quantity: eveningHours,
-        unitPrice: rates.weekdayEveningRate,
-        total: Number((eveningHours * rates.weekdayEveningRate).toFixed(2)),
-      });
-    }
-  }
-
-  // 5. ACTIVITY-BASED TRANSPORT
-  if (input.travelKms && input.travelKms > 0) {
-    items.push({
-      supportItemCode: '01_799_0107_1_1',
-      description: `Activity-Based Transport (${input.travelKms} km @ $${rates.travelKmRate}/km)`,
-      quantity: input.travelKms,
-      unitPrice: rates.travelKmRate,
-      total: Number((input.travelKms * rates.travelKmRate).toFixed(2)),
-    });
-  }
-
-  return items;
-}
+#### 4.3 Effective Rate Rule (APPROVED)
 ```
+ndisCap       = rate from NdisSupportItem for (item code, tier)
+agreedRate    = Client.hourlyRateAgreed (nullable)
+effectiveRate = agreedRate === null ? ndisCap : min(agreedRate, ndisCap)
+```
+- Time tiers only. `TRAVEL` always uses the statutory per-km rate.
+- The cap is a legal maximum; a lower agreed rate is billed as agreed.
+- Both `ndisCapRate` and `appliedRate` are returned per line for UI transparency.
+- `Client.defaultSupportItemCode` pre-fills the shift's support item (fallback `01_011_0107_1_1`).
 
-#### 4.3 Voice-to-JSON Shift Extractor (`src/shifts/voice-parser.ts`)
-- Support workers tap the microphone button while in their car and say:  
-  *"Worked with Sarah today from 6pm to 9:30pm, drove 12 kilometers to the community pool and did meal prep."*
-- Backend ingests audio via Groq Whisper (`model: whisper-large-v3`) -> transcribes in <500ms -> passes transcript to Gemini Flash with strict JSON schema:
-```json
-{
-  "clientName": "Sarah",
-  "shiftDate": "2026-08-31",
-  "startTime": "18:00",
-  "endTime": "21:30",
-  "travelKms": 12,
-  "caseNotes": "Community access to local pool and evening meal preparation."
-}
+#### 4.4 Rounding Rules (money must be reproducible)
+1. Quantities (hours/km) rounded to **2 decimals**, half-up.
+2. `lineAmount = round2(quantity × appliedRate)`.
+3. `grandTotal = sum of already-rounded line amounts` (never re-rounded).
+4. Storage uses `Prisma.Decimal` / `@db.Decimal(10,2)`. No JS floats, no `toFixed()` for stored money.
+
+#### 4.5 Worked Examples (test fixtures — exact values)
+
+| Example | Input | Result |
+| :--- | :--- | :--- |
+| A | Wed 18:00–21:30, 12 km | `DAY` 2.00h × 67.56 = **135.12** + `EVENING` 1.50h × 74.42 = **111.63** + `TRAVEL` 12 km × 0.97 = **11.64** → **258.39** |
+| B | Tue 09:00–13:00 | `DAY` 4.00h × 67.56 = **270.24** |
+| C | Sat 10:00–14:30 | `SATURDAY` 4.50h × 95.07 = **427.82** |
+| D | Sun 08:00–12:00 | `SUNDAY` 4.00h × 122.59 = **490.36** |
+| E | Public holiday 09:00–12:00 | `HOLIDAY` 3.00h × 150.12 = **450.36** |
+| F | Fri 22:00 → Sat 01:00 | `EVENING` 2.00h × 74.42 = 148.84 + `SATURDAY` 1.00h × 95.07 = 95.07 → **243.91** |
+| G | Thu 23:00 → Fri 02:00 (Fri = holiday) | `EVENING` 1.00h × 74.42 = 74.42 + `HOLIDAY` 2.00h × 150.12 = 300.24 → **374.66** |
+| H | Agreed rate 60.00, weekday 09:00–11:00 | effective 60.00 → 2.00 × 60.00 = **120.00** |
+| I | Agreed rate 80.00, weekday 09:00–11:00 | capped at 67.56 → 2.00 × 67.56 = **135.12** |
+
+#### 4.6 Timezone & Daylight Saving (MANDATORY)
+- Additive field `Business.timezone` (default `Australia/Sydney`), derived from `Business.state` (NSW/ACT→`Australia/Sydney`, VIC→`Australia/Melbourne`, QLD→`Australia/Brisbane`, SA→`Australia/Adelaide`, WA→`Australia/Perth`, TAS→`Australia/Hobart`, NT→`Australia/Darwin`).
+- Use **luxon**. `Date.getUTCDay()` / `getDay()` must never be used for tier decisions.
+- **Duration** comes from the absolute UTC difference (DST-correct); **tier** comes from the local wall clock. Spring-forward 01:00→04:00 = **2.0 real hours**; fall-back 01:00→04:00 = **4.0 real hours**.
+- The same engine output drives both the on-screen preview and the stored values.
+
+#### 4.7 Public Holiday Detection
+1. **Auto:** `date-holidays` package initialised per business state (`new Holidays('AU', state)`) — free, offline, handles substitute days.
+2. **Manual override:** flag `isPublicHoliday: true|false` — `true` forces `HOLIDAY`, `false` forces a normal tier. Omitted = auto.
+3. Persist `isPublicHoliday`, `publicHolidayName`, `holidaySource` (`AUTO` | `MANUAL` | `NOT_HOLIDAY`) and expose them in responses.
+
+#### 4.8 Calculation Engine (`src/shifts/shift.engine.ts`)
+- **Pure + deterministic:** no DB, no network, no `Date.now()`; rate table and holiday facts are arguments.
+- **Input:** `{ date, startTime, endTime, travelKms?, timezone, isPublicHoliday? }` + resolved `RateTable`.
+- **Output:** ordered `CalculatedLine[]` (tier, item code, description, quantity, unit, `ndisCapRate`, `appliedRate`, `amount`, `segmentStart/End`, `sortOrder`) + `totalHours`, `travelKms`, `grandTotal`, holiday facts, `startAt`/`endAt`.
+- **Algorithm:** validate → build local start/end (end on the next day when `endTime <= startTime`) → absolute duration → duration guards → segment walk splitting at `00:00` and weekday `20:00` → per-segment tier → `round2` lines → merge adjacent identical-tier lines → append travel line → totals.
+- **Description templates:** `"Weekday Daytime Support (HH:mm - HH:mm)"`, `"Weekday Evening Support (HH:mm - HH:mm)"`, `"Saturday Support (…)"`, `"Sunday Support (…)"`, `"Public Holiday Support (…)"`, `"Activity-Based Transport (N km @ $R/km)"`.
+- **Engine errors:** `SHIFT_TIME_FORMAT_INVALID`, `SHIFT_DATE_INVALID`, `SHIFT_DURATION_INVALID`, `SHIFT_DURATION_TOO_LONG`, `TRAVEL_KM_INVALID`, `TRAVEL_NOT_ALLOWED_FOR_ITEM`, `SUPPORT_CATALOGUE_INCOMPLETE`.
+- **Test matrix:** 22 mandatory cases (19:59/20:00/20:01 boundaries, weekend, holiday auto+manual, three overnight variants, agreed-rate above/below cap, travel allowed/forbidden/zero, 13 h warning, 17 h block, DST both directions, merged segments, missing catalogue row).
+
+#### 4.9 Approved Decisions (DO NOT RE-LITIGATE)
+
+| # | Decision | Behaviour |
+| :--- | :--- | :--- |
+| D1 | Shift editing | Allowed while `PENDING`; **forbidden once invoiced** (`409 SHIFT_ALREADY_INVOICED`) |
+| D2 | Budget overrun | **Warn, never block** (`warnings: ['BUDGET_EXHAUSTED']`) |
+| D3 | Sleepover / night flat item | **Deferred to v2** — needs the official catalogue code + rate |
+| D4 | Rate source | `NdisSupportItem` catalogue only |
+| D5 | Agreed rate vs cap | `min(agreed, cap)` on time tiers |
+| D6 | Early-morning hours | 00:00–06:00 = `DAY` rate |
+| D7 | Overnight | Split at local midnight, tier per day |
+| D8 | Timezone | Business timezone + luxon + DST aware |
+| D9 | Holidays | `date-holidays` (state) + manual override |
+| D10 | Voice gating | Pro only; trial = 3 parses |
+| D11 | Audio retention | Never stored (memory only) |
+| D12 | AI output | Preview only; worker confirms |
+| D13 | AI privacy | First name only; no surnames/NDIS numbers |
+| D14 | Delete | Soft cancel (`status = CANCELLED`, `cancelledAt`); row preserved |
+| D15 | Invoiced shift | Immutable |
+| D16 | Rate snapshot | `appliedRate` + `ndisCapRate` stored per line |
+| D17 | Dashboard | Single `GET /dashboard/summary` endpoint |
+| D18 | Budget update | Recomputed on shift create/edit/cancel |
+| D19 | Double-submit | Optional `Idempotency-Key` header, unique per business |
+| D20 | Client change on edit | Not allowed (delete + re-create) |
+
+#### 4.10 API Endpoints
+
+| Method | Endpoint | Roles | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/shifts` | OWNER, OFFICE_MANAGER, TECHNICIAN | Log shift → run engine → persist shift + line items → return preview, budget block, warnings |
+| `GET` | `/api/v1/shifts` | all (TECHNICIAN = own only) | Paginated list + filters (`from`, `to`, `clientId`, `userId`, `status`, `isInvoiced`, `sort`, `order`) + `summary` totals |
+| `GET` | `/api/v1/shifts/:id` | all (TECHNICIAN = own only) | Detail with `lineItems` |
+| `PATCH` | `/api/v1/shifts/:id` | all (TECHNICIAN = own only) | Edit `PENDING` shift; re-runs the engine; re-creates line items |
+| `DELETE` | `/api/v1/shifts/:id` | all (TECHNICIAN = own only) | Soft cancel; forbidden when invoiced |
+| `GET` | `/api/v1/shifts/uninvoiced` | all (TECHNICIAN = own only) | `PENDING` shifts grouped by participant with totals (Module 5 batch invoicing) |
+| `POST` | `/api/v1/shifts/voice-parse` | all (plan-gated) | Audio → transcript → structured JSON preview (never saves) |
+| `GET` | `/api/v1/dashboard/summary` | all (TECHNICIAN = own only) | Weekly earnings + % change, uninvoiced totals, active participants, 5 recent shifts, budget watch, trial usage |
+
+#### 4.11 Voice-to-JSON Shift Extractor (`src/shifts/voice-parser.ts`)
+- **Flow:** `multipart/form-data` (`file`, max **5 MB**) → in-memory buffer → **Groq Whisper** (`whisper-large-v3`, `language: en`, `temperature: 0`) → **Gemini Flash** structured JSON (`temperature: 0`, JSON schema enforced) → Zod validation → server-side client matching → preview response.
+- **Extracted schema:** `{ clientFirstName, shiftDate, startTime, endTime, travelKms, caseNotes, confidence, missingFields[] }`.
+- **Limits:** 60 s max audio; 10 requests/min/user and 30/day/user; accepted `audio/webm|ogg|mp4|mpeg|wav|x-m4a|aac`.
+- **Privacy (mandatory):** audio never persisted; no surname/NDIS number/address/DOB sent to any provider; 9-digit sequences redacted from the transcript and from `caseNotes`; audit stores only non-sensitive metadata (`SHIFT_VOICE_PARSED`).
+- **Client matching:** exact → prefix → candidates list (max 5). AI never receives or returns a `clientId`.
+- **Human confirmation:** the endpoint **never creates a shift**; the UI prefills the form and the worker submits via `POST /shifts`.
+- **Fallback:** provider timeout (`504`) → manual form stays usable; missing AI keys → server still boots, endpoint returns `503 VOICE_UNAVAILABLE`.
+- **iPhone compatibility:** the frontend must fall back to `audio/mp4` when `MediaRecorder.isTypeSupported('audio/webm')` is false.
+
+#### 4.12 Plan Gating & Trial Limits (Module 4)
+| Capability | Trial | Starter | Pro |
+| :--- | :--- | :--- | :--- |
+| Manual shifts | **5 total** | unlimited | unlimited |
+| Voice AI parses | **3 total** | ❌ blocked | unlimited |
+
+- `checkTrialResourceLimit` gains the `'voice'` resource type, counting `SHIFT_VOICE_PARSED` audit events (deleting shifts cannot reset usage).
+- Error codes: `403 TRIAL_SHIFT_LIMIT_REACHED`, `403 TRIAL_VOICE_LIMIT_REACHED`, `403 VOICE_PLAN_REQUIRED`, `402 TRIAL_EXPIRED` (existing).
+- Gating uses `Business.planTier` (`TRIAL` / `STARTER` / `PRO`), which Module 5 updates on subscription.
+
+#### 4.13 Budget Tracking (Module 3 integration)
+- `Client.allocatedBudgetSpent` = sum of `totalAmount` of that client's **non-cancelled** shifts (`PENDING` + `INVOICED`); recomputed via an exported helper `recalculateClientBudgetSpent(clientId, businessId)` after every shift create/edit/cancel (idempotent, drift-free).
+- Thresholds returned to the client: `< 70%` = `OK`, `70–99%` = `WARNING`, `>= 100%` = `EXHAUSTED` (amber `#F59E0B`, red `#EF4444`).
+- Never blocks (decision D2).
+
+#### 4.14 Validation & Safety Guards
+- **Date:** future dates rejected (`SHIFT_DATE_IN_FUTURE`); backdating window **90 days** (`SHIFT_DATE_TOO_OLD`).
+- **Duration:** `> 16 h` rejected (`SHIFT_DURATION_TOO_LONG`); `> 12 h` accepted with `LONG_SHIFT_WARNING`.
+- **Travel:** `> 500 km` or negative rejected (`TRAVEL_KM_INVALID`); travel on an item with `isTravelAllowed = false` rejected (`TRAVEL_NOT_ALLOWED_FOR_ITEM`).
+- **Overlap:** same worker with an overlapping non-cancelled shift → `409 SHIFT_OVERLAP` (conflicting id in `details`).
+- **Duplicate:** same worker + client + `startAt` → `409 DUPLICATE_SHIFT`.
+- **Idempotency:** `Idempotency-Key` replay returns the original shift (`200`), never a second row.
+- **Immutability:** invoiced shifts cannot be edited or deleted; cancelled shifts cannot be edited.
+- Every mutation is tenant-scoped (`businessId`) and audit-logged.
+
+#### 4.15 Audit Events
+| Event | Metadata (never sensitive) |
+| :--- | :--- |
+| `SHIFT_LOGGED` | `shiftId, clientId, supportItemCode, totalHours, travelKms, totalAmount, rateTiers[], isPublicHoliday, holidaySource, voiceAssisted, idempotentReplay` |
+| `SHIFT_UPDATED` | `shiftId, changedFields[], oldTotalAmount, newTotalAmount` |
+| `SHIFT_DELETED` | `shiftId, clientId, cancelledTotalAmount` |
+| `SHIFT_VOICE_PARSED` | `matched, clientCandidatesCount, confidenceBucket, missingFieldsCount, ndisNumberRedacted` |
+
+#### 4.16 Out of Scope for v1 (v2 backlog — DO NOT BUILD)
+1. **Night-time sleepover** flat item (requires the official NDIS item code + rate from the Support Catalogue — a guessed code causes plan-manager rejection).
+2. Short-notice **cancellation** claims.
+3. **PRODA / Myplace CSV** export.
+4. Offline shift queue (PWA background sync).
+5. Billing-increment rounding modes (15-minute blocks).
+6. Remote / Very Remote price regions (v1 uses National rates).
+7. Plan-manager payment reminders.
+
+#### 4.17 Environment Variables (additions)
+```bash
+GROQ_API_KEY="gsk_..."      # console.groq.com — Whisper transcription (free tier)
+GEMINI_API_KEY="AIza..."    # aistudio.google.com — structured JSON extraction (free tier)
 ```
 
 ---
@@ -879,11 +973,14 @@ PUT    /clients/:id                # Update participant or plan manager email
 DELETE /clients/:id                # Soft-delete participant
 
 Module 4: Shift Logging & Auto-Split Engine
-POST   /shifts                     # Log shift & return live auto-split preview
-POST   /shifts/voice-parse         # Ingest audio transcript & extract structured shift JSON
-GET    /shifts/uninvoiced          # Get all uninvoiced shifts grouped by client
-GET    /shifts                     # List shift history with date range filtering
-DELETE /shifts/:id                 # Delete uninvoiced shift
+POST   /shifts                     # Log shift, run deterministic NDIS split, persist shift + line items
+GET    /shifts                     # List shift history (from/to/clientId/userId/status + pagination + summary)
+GET    /shifts/:id                 # Shift detail with rate-split line items
+PATCH  /shifts/:id                 # Edit a PENDING shift (re-runs the split); forbidden once invoiced
+DELETE /shifts/:id                 # Soft-cancel a shift (row preserved); forbidden once invoiced
+GET    /shifts/uninvoiced          # PENDING shifts grouped by participant (Module 5 batch invoicing)
+POST   /shifts/voice-parse         # Audio -> Groq Whisper -> Gemini JSON preview (plan-gated, never saves)
+GET    /dashboard/summary          # Weekly earnings, uninvoiced totals, budget watch, recent shifts
 
 Module 5: Invoicing & Shield Dispatch
 POST   /invoices/generate          # Validate via Shield, build PDF, save to DB & dispatch email
