@@ -1,5 +1,20 @@
 import { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
+
+/**
+ * Local audio-file shape. Declared here (instead of relying on @types/multer's
+ * Express augmentation) so the production build never depends on devDependencies
+ * — Render installs with NODE_ENV=production.
+ */
+interface UploadedAudioFile {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+}
+
+function multerErrorCode(err: unknown): string | undefined {
+  return (err as { code?: string } | null)?.code;
+}
 import { ApiError } from '../utils/ApiError';
 import { assertCanMutate, checkTrialResourceLimit } from '../business/trial.util';
 import { recordAuditEvent } from '../audit/audit.service';
@@ -27,11 +42,12 @@ const upload = multer({
 export function voiceUploadMiddleware(req: Request, res: Response, next: NextFunction): void {
   upload.single('file')(req, res, (err: unknown) => {
     if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
+      const code = multerErrorCode(err);
+      if (code === 'LIMIT_FILE_SIZE') {
         next(ApiError.tooLarge('Recording is too large (max 5 MB).', 'VOICE_FILE_TOO_LARGE'));
         return;
       }
-      next(ApiError.badRequest(`Audio upload failed: ${err.code}`, 'VOICE_UPLOAD_FAILED'));
+      next(ApiError.badRequest(`Audio upload failed: ${code ?? 'UNKNOWN'}`, 'VOICE_UPLOAD_FAILED'));
       return;
     }
     if (err) {
@@ -63,7 +79,7 @@ export async function voiceParse(req: Request, res: Response, next: NextFunction
       await checkTrialResourceLimit(businessId, 'voice');
     }
 
-    const file = req.file;
+    const file = (req as Request & { file?: UploadedAudioFile }).file;
     if (!file) throw ApiError.badRequest('Missing audio file.', 'VOICE_FILE_MISSING');
     if (!ACCEPTED_MIME.has(file.mimetype)) {
       throw ApiError.unsupportedMediaType(`Unsupported audio format: ${file.mimetype}`, 'INVALID_AUDIO_FORMAT');
