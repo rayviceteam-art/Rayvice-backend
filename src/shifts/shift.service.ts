@@ -411,7 +411,7 @@ export async function cancelShift(ctx: ActorContext, id: string) {
   }
   // idempotent: cancelling an already-cancelled shift is a no-op success
 
-  return { success: true };
+  return { shiftId: id, status: 'CANCELLED' };
 }
 
 /** Section 12.6 — GET /shifts/uninvoiced */
@@ -442,6 +442,8 @@ export async function getUninvoicedGrouped(ctx: ActorContext) {
     return {
       clientId,
       clientName: clientShifts[0].client.participantName,
+      ndisNumber: clientShifts[0].client.ndisNumber,
+      planManagementType: clientShifts[0].client.planManagementType,
       shiftCount: clientShifts.length,
       totalHours: Number(totalHours.toFixed(2)),
       totalTravelKms: Number(totalTravelKms.toFixed(2)),

@@ -43,8 +43,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const remove = asyncHandler(async (req: Request, res: Response) => {
-  await shiftService.cancelShift(ctxFrom(req), req.params.id as string);
-  sendSuccess(res, 200, 'Shift cancelled successfully.', {});
+  const result = await shiftService.cancelShift(ctxFrom(req), req.params.id as string);
+  sendSuccess(res, 200, 'Shift cancelled successfully.', result);
 });
 
 export const uninvoiced = asyncHandler(async (req: Request, res: Response) => {
