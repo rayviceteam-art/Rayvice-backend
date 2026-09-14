@@ -114,8 +114,14 @@ export async function voiceParse(req: Request, res: Response, next: NextFunction
         ndisNumberRedacted: result.ndisNumberRedacted,
         warnings: result.warnings,
         usage: {
-          planTier: business.planTier,
+          // Counted from the audit log (same source as the trial cap, §10.3);
+          // the SHIFT_VOICE_PARSED event above is already recorded, so this
+          // includes the current parse (§11.8).
+          voiceParsesUsed: await prisma.auditLog.count({
+            where: { businessId, action: 'SHIFT_VOICE_PARSED' },
+          }),
           voiceParsesLimit: business.planTier === 'TRIAL' ? 3 : null,
+          planTier: business.planTier,
         },
       },
     });

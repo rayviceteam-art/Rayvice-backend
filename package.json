@@ -13,7 +13,7 @@
     "postinstall": "npx prisma generate || true",
     "start": "node dist/server.js",
     "typecheck": "npx tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test --experimental-test-module-mocks \"tests/**/*.test.ts\" \"tests/**/*.test.mts\"",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",

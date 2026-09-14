@@ -13,6 +13,7 @@ const num = (d: Prisma.Decimal | null | undefined): number => (d ? Number(d.toFi
 export interface ShiftWithRelations {
   id: string;
   clientId: string;
+  userId: string;
   client: { participantName: string; ndisNumber: string };
   shiftDate: Date | string;
   startTime: string;
@@ -61,6 +62,7 @@ export function toShiftView(shift: ShiftWithRelations) {
   return {
     id: shift.id,
     clientId: shift.clientId,
+    userId: shift.userId, // §7.5 — the UI needs ownership for TECHNICIAN edit/cancel rules
     clientName: shift.client.participantName,
     ndisNumber: shift.client.ndisNumber, // Q4: TECHNICIAN sees full number, same as Module 3
     shiftDate: shiftDateStr,

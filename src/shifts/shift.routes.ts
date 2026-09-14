@@ -3,6 +3,7 @@ import * as controller from './shift.controller';
 import { voiceUploadMiddleware, voiceParse } from './voice.controller';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
+import { voiceDailyRateLimiter, voiceMinuteRateLimiter } from '../middleware/rateLimiter';
 import { validateRequest } from '../middleware/validateRequest';
 import {
   createShiftRequestSchema,
@@ -23,6 +24,8 @@ router.get('/uninvoiced', authorize('OWNER', 'OFFICE_MANAGER', 'TECHNICIAN'), co
 router.post(
   '/voice-parse',
   authorize('OWNER', 'OFFICE_MANAGER', 'TECHNICIAN'),
+  voiceMinuteRateLimiter,
+  voiceDailyRateLimiter,
   voiceUploadMiddleware,
   voiceParse
 );

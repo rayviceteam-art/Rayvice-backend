@@ -51,3 +51,32 @@ export const loginRateLimiter = rateLimit({
   },
   handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many login attempts for this account. Please try again later.')),
 });
+
+/**
+ * MODULE 4 — voice AI limits (BACKEND SPEC §11.3 / §12.7).
+ * 10 requests / minute / user and 30 requests / day / user, in addition to
+ * the global limiter. Keyed by authenticated user id (IP fallback for safety).
+ */
+function voiceKeyGenerator(req: any): string {
+  const userId = req.user?.id;
+  if (typeof userId === 'string' && userId.length > 0) return `voice:${userId}`;
+  return `voice:${req.ip ?? 'unknown'}`;
+}
+
+export const voiceMinuteRateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: voiceKeyGenerator,
+  handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many voice attempts. Please wait a moment.')),
+});
+
+export const voiceDailyRateLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: voiceKeyGenerator,
+  handler: (_req, _res, next) => next(ApiError.tooManyRequests('Daily voice limit reached. Please try again tomorrow.')),
+});
