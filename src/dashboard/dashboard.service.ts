@@ -8,17 +8,21 @@ import { DateTime } from 'luxon';
 import { prisma } from '../config/database';
 import { toShiftView, budgetBlock } from '../shifts/shift.mapper';
 import { ActorContext } from '../shifts/shift.service';
+import { logger } from '../config/logger';
 
-function weekWindow(businessTimezone: string, weeksAgo: 0 | 1) {
-  const now = DateTime.now().setZone(businessTimezone);
-  const monday = now.startOf('week').minus({ weeks: weeksAgo }); // luxon startOf('week') = Monday
+const DEFAULT_TIMEZONE = 'Australia/Sydney';
+
+function weekWindow(businessTimezone: string | null, weeksAgo: 0 | 1) {
+  const tz = businessTimezone || DEFAULT_TIMEZONE;
+  const now = DateTime.now().setZone(tz);
+  const monday = now.startOf('week').minus({ weeks: weeksAgo });
   const sunday = monday.plus({ days: 6 }).endOf('day');
   return { start: monday.toISODate()!, end: sunday.toISODate()! };
 }
 
 export async function getDashboardSummary(ctx: ActorContext) {
   const business = await prisma.business.findUniqueOrThrow({ where: { id: ctx.businessId } });
-  const tz = business.timezone;
+  const tz = business.timezone || DEFAULT_TIMEZONE;
 
   const shiftScope: Prisma.ShiftWhereInput = { businessId: ctx.businessId };
   if (ctx.role === 'TECHNICIAN') shiftScope.userId = ctx.userId;
@@ -26,41 +30,74 @@ export async function getDashboardSummary(ctx: ActorContext) {
   const thisWeek = weekWindow(tz, 0);
   const lastWeek = weekWindow(tz, 1);
 
-  const [thisWeekAgg, lastWeekAgg, uninvoicedAgg, activeParticipants, recentShifts, budgetClients] = await Promise.all([
-    prisma.shift.aggregate({
-      where: { ...shiftScope, status: { not: 'CANCELLED' }, shiftDate: { gte: thisWeek.start, lte: thisWeek.end } },
-      _sum: { totalAmount: true },
-      _count: true,
-    }),
-    prisma.shift.aggregate({
-      where: { ...shiftScope, status: { not: 'CANCELLED' }, shiftDate: { gte: lastWeek.start, lte: lastWeek.end } },
-      _sum: { totalAmount: true },
-    }),
-    prisma.shift.aggregate({
-      where: { ...shiftScope, status: 'PENDING' },
-      _sum: { totalAmount: true },
-      _count: true,
-    }),
-    prisma.client.count({ where: { businessId: ctx.businessId, isActive: true, deletedAt: null } }),
-    prisma.shift.findMany({
-      where: shiftScope,
-      include: { client: true, lineItems: true },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    }),
-    prisma.client.findMany({
-      where: { businessId: ctx.businessId, isActive: true, deletedAt: null, allocatedBudgetTotal: { not: null } },
-    }),
-  ]);
+  const thisWeekShiftWhere: Prisma.ShiftWhereInput = {
+    ...shiftScope,
+    status: { not: 'CANCELLED' },
+    shiftDate: { gte: thisWeek.start, lte: thisWeek.end },
+  };
 
-  const thisWeekHoursAgg = await prisma.shiftLineItem.aggregate({
-    where: {
-      businessId: ctx.businessId,
-      unit: 'Hour',
-      shift: { ...shiftScope, status: { not: 'CANCELLED' }, shiftDate: { gte: thisWeek.start, lte: thisWeek.end } },
-    },
-    _sum: { quantity: true },
-  });
+  const lastWeekShiftWhere: Prisma.ShiftWhereInput = {
+    ...shiftScope,
+    status: { not: 'CANCELLED' },
+    shiftDate: { gte: lastWeek.start, lte: lastWeek.end },
+  };
+
+  let thisWeekAgg: any;
+  let lastWeekAgg: any;
+  let uninvoicedAgg: any;
+  let activeParticipants: number = 0;
+  let recentShifts: any[] = [];
+  let budgetClients: any[] = [];
+
+  try {
+    [thisWeekAgg, lastWeekAgg, uninvoicedAgg, activeParticipants, recentShifts, budgetClients] = await Promise.all([
+      prisma.shift.aggregate({
+        where: thisWeekShiftWhere,
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      prisma.shift.aggregate({
+        where: lastWeekShiftWhere,
+        _sum: { totalAmount: true },
+      }),
+      prisma.shift.aggregate({
+        where: { ...shiftScope, status: 'PENDING' },
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      prisma.client.count({ where: { businessId: ctx.businessId, isActive: true, deletedAt: null } }),
+      prisma.shift.findMany({
+        where: shiftScope,
+        include: { client: true, lineItems: true },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      prisma.client.findMany({
+        where: { businessId: ctx.businessId, isActive: true, deletedAt: null, allocatedBudgetTotal: { not: null } },
+      }),
+    ]);
+  } catch (err) {
+    logger.error('Dashboard batch query failed', { businessId: ctx.businessId, error: err instanceof Error ? err.message : err });
+    throw err;
+  }
+
+  let thisWeekHoursQuantity: number = 0;
+  try {
+    const thisWeekShiftIds = await prisma.shift.findMany({
+      where: thisWeekShiftWhere,
+      select: { id: true },
+    });
+    const ids = thisWeekShiftIds.map((s) => s.id);
+    if (ids.length > 0) {
+      const hoursAgg = await prisma.shiftLineItem.aggregate({
+        where: { businessId: ctx.businessId, unit: 'Hour', shiftId: { in: ids } },
+        _sum: { quantity: true },
+      });
+      thisWeekHoursQuantity = Number((hoursAgg._sum.quantity ?? new Prisma.Decimal(0)).toFixed(2));
+    }
+  } catch (err) {
+    logger.error('Dashboard hours query failed', { businessId: ctx.businessId, error: err instanceof Error ? err.message : err });
+  }
 
   const earnings = Number((thisWeekAgg._sum.totalAmount ?? new Prisma.Decimal(0)).toFixed(2));
   const previousWeekEarnings = Number((lastWeekAgg._sum.totalAmount ?? new Prisma.Decimal(0)).toFixed(2));
@@ -93,20 +130,22 @@ export async function getDashboardSummary(ctx: ActorContext) {
 
   if (business.planTier === 'TRIAL') {
     const shiftsUsed = await prisma.shift.count({ where: { businessId: ctx.businessId, status: { not: 'CANCELLED' } } });
-    const trialEndsAt = DateTime.fromJSDate(business.trialEndsAt).setZone(tz);
-    const daysRemaining = Math.max(0, Math.ceil(trialEndsAt.diff(DateTime.now().setZone(tz), 'days').days));
+    const trialEndsAt = business.trialEndsAt
+      ? DateTime.fromJSDate(business.trialEndsAt).setZone(tz)
+      : null;
+    const daysRemaining = trialEndsAt ? Math.max(0, Math.ceil(trialEndsAt.diff(DateTime.now().setZone(tz), 'days').days)) : 0;
     trial = {
       status: daysRemaining > 0 ? 'TRIALING' : 'EXPIRED',
       daysRemaining,
       shiftsUsed,
-      shiftsLimit: 5, // TRIAL_LIMITS.MAX_SHIFTS
+      shiftsLimit: 5,
     };
   }
 
   return {
     thisWeek: {
       earnings,
-      hours: Number((thisWeekHoursAgg._sum.quantity ?? new Prisma.Decimal(0)).toFixed(2)),
+      hours: thisWeekHoursQuantity,
       shiftCount: thisWeekAgg._count,
       previousWeekEarnings,
       changePercent,

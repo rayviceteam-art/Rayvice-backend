@@ -21,22 +21,4 @@ router.get(
   })
 );
 
-// TEMP DIAGNOSTIC — REMOVE AFTER FIX
-router.get(
-  '/_diag',
-  authenticate,
-  asyncHandler(async (req: Request, res: Response) => {
-    try {
-      const data = await getDashboardSummary({
-        businessId: req.user!.businessId,
-        userId: req.user!.id,
-        role: req.user!.role as 'OWNER' | 'OFFICE_MANAGER' | 'TECHNICIAN' | 'SUPER_ADMIN',
-      });
-      res.json({ ok: true, data });
-    } catch (err: any) {
-      res.json({ ok: false, name: err?.constructor?.name, message: err?.message, stack: err?.stack?.split('\n').slice(0, 8) });
-    }
-  })
-);
-
 export default router;
