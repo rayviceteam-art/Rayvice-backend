@@ -138,7 +138,7 @@ model Business {
 
   // --- Module 4: rate-tier correctness + voice gating ---
   timezone String   @default("Australia/Sydney")
-  planTier PlanTier @default(TRIAL)
+  planTier PlanTier @default(TRIAL) @map("plan_tier")
 
   // --- Trial Policy (GLOBAL-RULES §2) ---
   trialStartedAt DateTime  @default(now())
