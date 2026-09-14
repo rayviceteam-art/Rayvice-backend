@@ -17,7 +17,7 @@ function weekWindow(businessTimezone: string | null, weeksAgo: 0 | 1) {
   const now = DateTime.now().setZone(tz);
   const monday = now.startOf('week').minus({ weeks: weeksAgo });
   const sunday = monday.plus({ days: 6 }).endOf('day');
-  return { start: monday.toISODate()!, end: sunday.toISODate()! };
+  return { start: monday.toISO()!, end: sunday.toISO()! };
 }
 
 export async function getDashboardSummary(ctx: ActorContext) {
