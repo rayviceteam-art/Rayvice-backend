@@ -7,13 +7,25 @@
  */
 import { prisma } from '../config/database';
 import { ApiError } from '../utils/ApiError';
+import { logger } from '../config/logger';
 import { voiceParseAiSchema, VoiceParseAiOutput } from './shift.validators';
 
 const GROQ_TIMEOUT_MS = 20_000;
 const GEMINI_TIMEOUT_MS = 20_000;
 const NDIS_NUMBER_RE = /\b\d{9}\b/g;
+
+/** Groq accepts these containers; the filename extension must match the audio. */
+const AUDIO_EXTENSION_BY_MIME: Record<string, string> = {
+  'audio/webm': 'webm',
+  'audio/ogg': 'ogg',
+  'audio/mp4': 'mp4',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-m4a': 'm4a',
+  'audio/aac': 'm4a',
+};
 /** Gemini model — 1.5 Flash is retired; override with GEMINI_MODEL if needed. */
-const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.6-flash';
 
 function redact(text: string): { text: string; redacted: boolean } {
   const redacted = NDIS_NUMBER_RE.test(text);
@@ -39,7 +51,10 @@ async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string
   if (!apiKey) throw ApiError.serviceUnavailable('Voice AI is not configured', 'VOICE_UNAVAILABLE');
 
   const form = new FormData();
-  form.append('file', new Blob([new Uint8Array(buffer)], { type: mimeType }), 'audio');
+  // Groq infers the container format from the filename extension and rejects an
+  // extension-less upload with `unsupported_audio_format`. Always send one.
+  const extension = AUDIO_EXTENSION_BY_MIME[mimeType] ?? 'webm';
+  form.append('file', new Blob([new Uint8Array(buffer)], { type: mimeType }), `shift.${extension}`);
   form.append('model', 'whisper-large-v3');
   form.append('language', 'en');
   form.append('response_format', 'json');
@@ -56,7 +71,17 @@ async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string
     'Voice transcription timed out',
   );
 
-  if (!res.ok) throw ApiError.gatewayTimeout('Voice transcription failed', 'VOICE_TRANSCRIPTION_FAILED');
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    logger.warn('Groq transcription rejected the upload', { status: res.status, detail: detail.slice(0, 300) });
+    if (res.status === 400 || res.status === 415) {
+      throw ApiError.unsupportedMediaType('That audio format is not supported on this device.', 'INVALID_AUDIO_FORMAT');
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw ApiError.serviceUnavailable('Voice transcription is not configured correctly.', 'VOICE_UNAVAILABLE');
+    }
+    throw ApiError.gatewayTimeout('Voice transcription failed', 'VOICE_TRANSCRIPTION_FAILED');
+  }
   const json = (await res.json()) as { text?: string };
   const transcript = (json.text ?? '').trim();
   if (transcript.split(/\s+/).filter(Boolean).length < 3) {
@@ -99,7 +124,18 @@ Transcript: """${safeTranscript}"""`;
     'Voice parsing timed out',
   );
 
-  if (!res.ok) throw ApiError.gatewayTimeout('Voice parsing failed', 'VOICE_PARSE_FAILED');
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    logger.warn('Gemini structured extraction failed', {
+      status: res.status,
+      model: GEMINI_MODEL,
+      detail: detail.slice(0, 300),
+    });
+    if (res.status === 401 || res.status === 403) {
+      throw ApiError.serviceUnavailable('Voice parsing is not configured correctly.', 'VOICE_UNAVAILABLE');
+    }
+    throw ApiError.gatewayTimeout('Voice parsing failed', 'VOICE_PARSE_FAILED');
+  }
   const json = await res.json();
   const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text;
   let parsed: unknown;
