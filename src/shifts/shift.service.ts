@@ -87,6 +87,16 @@ async function assertNoOverlapOrDuplicate(
 
 const SHIFT_INCLUDE = { client: true, lineItems: true } as const;
 
+/**
+ * Prisma's DateTime arguments require a FULL ISO-8601 instant. A bare
+ * "YYYY-MM-DD" string passes the generated types but is rejected at runtime
+ * with PrismaClientValidationError ("premature end of input"), which surfaced
+ * as a 500 on POST /shifts. Always convert date-only input to a Date first.
+ */
+function toDbDate(dateOnly: string): Date {
+  return new Date(`${dateOnly}T00:00:00.000Z`);
+}
+
 /** Section 12.1 — POST /shifts */
 export async function createShift(ctx: ActorContext, body: CreateShiftBody, idempotencyKey?: string) {
   await assertCanMutate(ctx.businessId);
@@ -134,7 +144,7 @@ export async function createShift(ctx: ActorContext, body: CreateShiftBody, idem
         businessId: ctx.businessId,
         userId: ctx.userId,
         clientId: body.clientId,
-        shiftDate: body.shiftDate,
+        shiftDate: toDbDate(body.shiftDate),
         startTime: body.startTime,
         endTime: body.endTime,
         totalHours: result.totalHours,
@@ -222,9 +232,10 @@ export async function listShifts(ctx: ActorContext, query: ListShiftsQuery) {
   if (query.status) where.status = query.status;
   if (query.isInvoiced !== undefined) where.isInvoiced = query.isInvoiced;
   if (query.from || query.to) {
+    // Date-only strings must be converted to real Dates for Prisma (see toDbDate).
     where.shiftDate = {
-      ...(query.from ? { gte: query.from } : {}),
-      ...(query.to ? { lte: query.to } : {}),
+      ...(query.from ? { gte: toDbDate(query.from) } : {}),
+      ...(query.to ? { lte: toDbDate(query.to) } : {}),
     };
   }
 
@@ -324,7 +335,7 @@ export async function updateShift(ctx: ActorContext, id: string, body: UpdateShi
     await tx.shift.update({
       where: { id },
       data: {
-        shiftDate: merged.shiftDate,
+        shiftDate: toDbDate(merged.shiftDate as string),
         startTime: merged.startTime,
         endTime: merged.endTime,
         totalHours: result.totalHours,
