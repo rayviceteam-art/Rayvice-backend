@@ -14,6 +14,7 @@ import { ApiError } from '../utils/ApiError';
 import { assertCanMutate, checkTrialResourceLimit } from '../business/trial.util';
 import { recordAuditEvent } from '../audit/audit.service';
 import { calculateShift } from './shift.engine';
+import { ShiftEngineError } from './shift.types';
 import { buildHolidayChecker } from './holiday.service';
 import { loadRateTable, resolveSupportItem } from './rateTable.loader';
 import { assertShiftDateInWindow, CreateShiftBody, UpdateShiftBody, ListShiftsQuery } from './shift.validators';
@@ -93,6 +94,32 @@ const SHIFT_INCLUDE = { client: true, lineItems: true } as const;
  * with PrismaClientValidationError ("premature end of input"), which surfaced
  * as a 500 on POST /shifts. Always convert date-only input to a Date first.
  */
+/**
+ * Runs the pure engine and translates its typed errors into API errors.
+ * Without this, an engine guard (e.g. SHIFT_DURATION_TOO_LONG) surfaced as a
+ * generic 500 instead of the documented 422.
+ */
+function runEngine(
+  input: Parameters<typeof calculateShift>[0],
+  rateTable: Parameters<typeof calculateShift>[1],
+  holidayChecker: Parameters<typeof calculateShift>[2]
+) {
+  try {
+    return calculateShift(input, rateTable, holidayChecker);
+  } catch (err) {
+    if (err instanceof ShiftEngineError) {
+      throw ApiError.unprocessable(err.message, err.code);
+    }
+    throw err;
+  }
+}
+
+/** Normalises a Prisma @db.Date value (Date) to a "YYYY-MM-DD" string. */
+function toDateOnlyString(value: Date | string): string {
+  if (typeof value === 'string') return value.slice(0, 10);
+  return value.toISOString().slice(0, 10);
+}
+
 function toDbDate(dateOnly: string): Date {
   return new Date(`${dateOnly}T00:00:00.000Z`);
 }
@@ -123,7 +150,7 @@ export async function createShift(ctx: ActorContext, body: CreateShiftBody, idem
   const rateTable = await loadRateTable(client.hourlyRateAgreed ?? null, travelAllowed);
   const holidayChecker = buildHolidayChecker(business.state);
 
-  const result = calculateShift(
+  const result = runEngine(
     {
       date: body.shiftDate,
       startTime: body.startTime,
@@ -299,7 +326,8 @@ export async function updateShift(ctx: ActorContext, id: string, body: UpdateShi
   const client = await getActiveClientOrThrow(existing.clientId, ctx.businessId);
 
   const merged = {
-    shiftDate: body.shiftDate ?? existing.shiftDate,
+    // Prisma returns a Date for @db.Date; normalise to a YYYY-MM-DD string
+    shiftDate: body.shiftDate ?? toDateOnlyString(existing.shiftDate),
     startTime: body.startTime ?? existing.startTime,
     endTime: body.endTime ?? existing.endTime,
     travelKms: body.travelKms !== undefined ? body.travelKms : existing.travelKms ? Number(existing.travelKms) : null,
@@ -314,7 +342,7 @@ export async function updateShift(ctx: ActorContext, id: string, body: UpdateShi
   const rateTable = await loadRateTable(client.hourlyRateAgreed ?? null, travelAllowed);
   const holidayChecker = buildHolidayChecker(business.state);
 
-  const result = calculateShift(
+  const result = runEngine(
     {
       date: merged.shiftDate as string,
       startTime: merged.startTime as string,
