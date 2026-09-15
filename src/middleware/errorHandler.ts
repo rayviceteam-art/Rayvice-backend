@@ -67,24 +67,9 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     stack: err instanceof Error ? err.stack : undefined,
   });
 
-  // TEMPORARY DIAGNOSTIC (enabled only when EXPOSE_ERRORS=true) — surfaces the
-  // underlying error for live debugging. Remove after the incident.
-  const debugPayload =
-    process.env.EXPOSE_ERRORS === 'true'
-      ? {
-          debug: {
-            name: err instanceof Error ? err.name : typeof err,
-            detail: err instanceof Error ? err.message : String(err),
-            code: (err as { code?: string } | null)?.code,
-            meta: (err as { meta?: unknown } | null)?.meta,
-          },
-        }
-      : {};
-
   res.status(statusCode).json({
     success: false,
     message: isUnexpected && isProduction ? 'An unexpected error occurred.' : message,
-    ...debugPayload,
     errorCode,
     ...(details ? { errors: details, details } : {}),
   });

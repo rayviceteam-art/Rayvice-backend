@@ -11,7 +11,7 @@ import { logger } from '../config/logger';
 import { voiceParseAiSchema, VoiceParseAiOutput } from './shift.validators';
 
 const GROQ_TIMEOUT_MS = 20_000;
-const GEMINI_TIMEOUT_MS = 20_000;
+const GEMINI_TIMEOUT_MS = 30_000;
 const NDIS_NUMBER_RE = /\b\d{9}\b/g;
 
 /** Groq accepts these containers; the filename extension must match the audio. */
@@ -45,6 +45,36 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, errorCode: string
   }
 }
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const RETRY_DELAY_MS = 800;
+
+/**
+ * Free-tier providers (Groq/Gemini) intermittently return 429/503 under load.
+ * One quick retry turns those transient failures into successful voice parses
+ * instead of a user-visible "voice timed out" error.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  errorCode: string,
+  timeoutMessage: string
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await withTimeout(fetch(url, init), timeoutMs, errorCode, timeoutMessage);
+      if (!RETRYABLE_STATUS.has(res.status) || attempt === 1) return res;
+      lastError = new Error(`provider responded ${res.status}`);
+    } catch (err) {
+      lastError = err;
+      if (attempt === 1) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+  }
+  throw lastError instanceof Error ? lastError : new Error('provider request failed');
+}
+
 /** Step 1 — Groq Whisper transcription (Section 11.4). */
 async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -60,12 +90,13 @@ async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string
   form.append('response_format', 'json');
   form.append('temperature', '0');
 
-  const res = await withTimeout(
-    fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+  const res = await fetchWithRetry(
+    'https://api.groq.com/openai/v1/audio/transcriptions',
+    {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
-    }),
+    },
     GROQ_TIMEOUT_MS,
     'VOICE_TRANSCRIPTION_FAILED',
     'Voice transcription timed out',
@@ -110,15 +141,16 @@ Output ONLY a JSON object matching this schema:
 
 Transcript: """${safeTranscript}"""`;
 
-  const res = await withTimeout(
-    fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+  const res = await fetchWithRetry(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0, responseMimeType: 'application/json' },
       }),
-    }),
+    },
     GEMINI_TIMEOUT_MS,
     'VOICE_PARSE_FAILED',
     'Voice parsing timed out',
