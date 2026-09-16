@@ -26,6 +26,14 @@ const AUDIO_EXTENSION_BY_MIME: Record<string, string> = {
 };
 /** Gemini model — 1.5 Flash is retired; override with GEMINI_MODEL if needed. */
 const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.6-flash';
+/**
+ * Free-tier capacity errors are common, and Google also retires models for new
+ * keys (gemini-2.5-flash already 404s). Try the configured model first, then
+ * stable fallbacks, instead of failing the whole voice request.
+ */
+const GEMINI_MODEL_CHAIN = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3.1-flash-lite'].filter(
+  (model, index, all) => Boolean(model) && all.indexOf(model) === index
+);
 
 function redact(text: string): { text: string; redacted: boolean } {
   const redacted = NDIS_NUMBER_RE.test(text);
@@ -142,35 +150,58 @@ Output ONLY a JSON object matching this schema:
 
 Transcript: """${safeTranscript}"""`;
 
-  const res = await fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-      }),
-    },
-    GEMINI_TIMEOUT_MS,
-    'VOICE_PARSE_FAILED',
-    'Voice parsing timed out',
-  );
+  let raw: string | undefined;
+  let lastStatus = 0;
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    logger.warn('Gemini structured extraction failed', {
-      status: res.status,
-      model: GEMINI_MODEL,
-      detail: detail.slice(0, 300),
-    });
-    if (res.status === 401 || res.status === 403) {
-      throw ApiError.serviceUnavailable('Voice parsing is not configured correctly.', 'VOICE_UNAVAILABLE');
+  for (const model of GEMINI_MODEL_CHAIN) {
+    const res = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+        }),
+      },
+      GEMINI_TIMEOUT_MS,
+      'VOICE_PARSE_FAILED',
+      'Voice parsing timed out',
+    );
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      lastStatus = res.status;
+      logger.warn('Gemini structured extraction failed', {
+        status: res.status,
+        model,
+        detail: detail.slice(0, 300),
+      });
+      if (res.status === 401 || res.status === 403) {
+        throw ApiError.serviceUnavailable('Voice parsing is not configured correctly.', 'VOICE_UNAVAILABLE');
+      }
+      continue; // try the next model in the chain
     }
+
+    const json = await res.json();
+    const candidate = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      try {
+        JSON.parse(candidate);
+        raw = candidate;
+        break;
+      } catch {
+        logger.warn('Gemini returned non-JSON output', { model, detail: candidate.slice(0, 200) });
+        continue;
+      }
+    }
+  }
+
+  if (!raw) {
+    logger.warn('All Gemini models failed for voice parsing', { chain: GEMINI_MODEL_CHAIN, lastStatus });
     throw ApiError.gatewayTimeout('Voice parsing failed', 'VOICE_PARSE_FAILED');
   }
-  const json = await res.json();
-  const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
