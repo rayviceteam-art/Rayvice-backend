@@ -46,7 +46,8 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, errorCode: string
 }
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const RETRY_DELAY_MS = 800;
+const RETRY_DELAY_MS = 700;
+const MAX_ATTEMPTS = 3;
 
 /**
  * Free-tier providers (Groq/Gemini) intermittently return 429/503 under load.
@@ -61,16 +62,16 @@ async function fetchWithRetry(
   timeoutMessage: string
 ): Promise<Response> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       const res = await withTimeout(fetch(url, init), timeoutMs, errorCode, timeoutMessage);
-      if (!RETRYABLE_STATUS.has(res.status) || attempt === 1) return res;
+      if (!RETRYABLE_STATUS.has(res.status) || attempt === MAX_ATTEMPTS - 1) return res;
       lastError = new Error(`provider responded ${res.status}`);
     } catch (err) {
       lastError = err;
-      if (attempt === 1) throw err;
+      if (attempt === MAX_ATTEMPTS - 1) throw err;
     }
-    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
   }
   throw lastError instanceof Error ? lastError : new Error('provider request failed');
 }
