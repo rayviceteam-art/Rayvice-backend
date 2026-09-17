@@ -7,6 +7,8 @@ interface SendEmailInput {
   subject: string;
   html: string;
   text?: string;
+  bcc?: string | string[]; // NEW — Module 5 (2.7.1)
+  attachments?: Array<{ filename: string; content: Buffer }>; // NEW — Module 5 (2.7.1)
 }
 
 let resendClient: Resend | null = null;
@@ -32,19 +34,24 @@ function getResendClient(): Resend | null {
   return resendClient;
 }
 
-export async function sendEmail(input: SendEmailInput): Promise<void> {
+/** Whether the Resend integration is configured — used by Module 5 to return 503 EMAIL_NOT_CONFIGURED. */
+export function isEmailConfigured(): boolean {
+  return Boolean(getApiKey());
+}
+
+export async function sendEmail(input: SendEmailInput): Promise<{ messageId: string | null }> {
   const client = getResendClient();
 
   if (!client) {
     if (isProduction) {
       logger.error('Resend API key is not configured; email was not sent.', { to: input.to, subject: input.subject });
-      return;
+      return { messageId: null };
     }
     logger.info('Email (dev mode — API key not configured, logging instead of sending)', {
       to: input.to,
       subject: input.subject,
     });
-    return;
+    return { messageId: null };
   }
 
   const sender = env.EMAIL_FROM || 'Rayvice <onboarding@resend.dev>';
@@ -65,6 +72,16 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
       subject: input.subject,
       html: input.html,
       text: input.text || '',
+      ...(input.bcc ? { bcc: Array.isArray(input.bcc) ? input.bcc : [input.bcc] } : {}),
+      ...(input.attachments && input.attachments.length > 0
+        ? {
+            attachments: input.attachments.map((a) => ({
+              filename: a.filename,
+              // Resend expects attachment content as a base64 string.
+              content: a.content.toString('base64'),
+            })),
+          }
+        : {}),
     });
 
     if (response.error) {
@@ -73,6 +90,7 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     }
 
     logger.info('Email sent successfully via Resend API', { to: input.to, subject: input.subject, id: response.data?.id });
+    return { messageId: response.data?.id ?? null };
   } catch (error) {
     logger.error('Failed to send email', { to: input.to, subject: input.subject, sender, error });
     throw error;

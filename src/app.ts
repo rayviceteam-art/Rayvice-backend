@@ -12,6 +12,9 @@ import adminRoutes from './admin/admin.routes';
 import clientRoutes from './clients/client.routes';
 import shiftRoutes from './shifts/shift.routes';
 import dashboardRoutes from './dashboard/dashboard.routes';
+import invoiceRoutes from './invoices/invoice.routes';
+import billingRoutes from './billing/billing.routes';
+import { handleStripeWebhook } from './billing/billing.controller';
 
 export function createApp(): Express {
   const app = express();
@@ -30,6 +33,11 @@ export function createApp(): Express {
       credentials: true,
     }),
   );
+
+  // --- Stripe webhook raw body requirement (spec 2.10.10) ---
+  // Must be mounted before express.json() to preserve raw signature bytes
+  app.post('/api/v1/billing/webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
+  app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
 
   // --- Body & cookie parsing ---
   app.use(express.json({ limit: '1mb' }));
@@ -62,6 +70,12 @@ export function createApp(): Express {
   app.use('/api/shifts', shiftRoutes);
   app.use('/api/v1/dashboard', dashboardRoutes);
   app.use('/api/dashboard', dashboardRoutes);
+
+  // --- Module 5: Invoicing & Stripe billing ---
+  app.use('/api/v1/invoices', invoiceRoutes);
+  app.use('/api/invoices', invoiceRoutes);
+  app.use('/api/v1/billing', billingRoutes);
+  app.use('/api/billing', billingRoutes);
 
   // --- 404 + centralized error handling (BACKEND-01 §7) ---
   app.use(notFoundHandler);

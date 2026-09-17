@@ -107,6 +107,20 @@ enum AuditAction {
   SHIFT_UPDATED
   SHIFT_DELETED
   SHIFT_VOICE_PARSED
+  // --- Module 5 additions (2.3.5) ---
+  INVOICE_GENERATED
+  INVOICE_SENT
+  INVOICE_RESENT
+  INVOICE_PAID
+  INVOICE_CANCELLED
+  INVOICE_REJECTED
+  INVOICE_PDF_VIEWED
+  PRODA_EXPORT_GENERATED
+  SUBSCRIPTION_CHECKOUT_CREATED
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_CANCELLED
+  SUBSCRIPTION_PAYMENT_FAILED
 }
 
 // -----------------------------------------------------------------------------
@@ -155,6 +169,17 @@ model Business {
   clients   Client[]
   shifts    Shift[]
   invoices  Invoice[]
+
+  // --- Module 5: Stripe billing (2.3.4) ---
+  stripeCustomerId     String?   @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?   @map("stripe_subscription_id")
+  subscriptionStatus   String?   @map("subscription_status")
+  currentPeriodEnd     DateTime? @map("current_period_end")
+  cancelAtPeriodEnd    Boolean   @default(false) @map("cancel_at_period_end")
+  planStartedAt        DateTime? @map("plan_started_at")
+
+  stripeEvents         StripeEvent[]
+  invoiceSequences     InvoiceSequence[]
 
   @@index([status])
   @@index([createdAt])
@@ -447,6 +472,28 @@ model Invoice {
   sentAt          DateTime?          @map("sent_at")
   paidAt          DateTime?          @map("paid_at")
 
+  // --- Module 5 additions (2.3.1) ---
+  invoiceYear             Int?      @map("invoice_year")
+  sequenceNumber          Int?      @map("sequence_number")
+  planManagerAgencyName   String?   @map("plan_manager_agency_name")
+  planManagementType      PlanManagementType? @map("plan_management_type")
+  participantNdisNumber   String?   @map("participant_ndis_number")
+  businessAbn             String?   @map("business_abn")
+  businessBsb             String?   @map("business_bsb")
+  businessAccountNumber   String?   @map("business_account_number")
+  businessAccountName     String?   @map("business_account_name")
+  businessBankName        String?   @map("business_bank_name")
+  businessName            String?   @map("business_name")
+  businessEmail           String?   @map("business_email")
+  businessPhone           String?   @map("business_phone")
+  businessAddress         String?   @map("business_address")
+  shieldReport            Json?     @map("shield_report")
+  rejectionReason         String?   @map("rejection_reason")
+  cancelledAt             DateTime? @map("cancelled_at")
+  emailMessageId          String?   @map("email_message_id")
+  lastSentAt              DateTime? @map("last_sent_at")
+  notes                   String?   @db.Text
+
   createdAt       DateTime           @default(now()) @map("created_at")
   updatedAt       DateTime           @updatedAt @map("updated_at")
 
@@ -456,6 +503,8 @@ model Invoice {
   lineItems       InvoiceLineItem[]
 
   @@index([businessId, status])
+  @@unique([businessId, invoiceYear, sequenceNumber])
+  @@index([businessId, issueDate])
   @@map("invoices")
 }
 
@@ -466,6 +515,7 @@ model InvoiceLineItem {
   supportItemCode String   @map("support_item_code") // e.g. "01_011_0107_1_1"
   description     String
   quantity        Decimal  @map("quantity") @db.Decimal(6, 2) // Hours or KMs
+  unit            String   @default("Hour")
   unitPrice       Decimal  @map("unit_price") @db.Decimal(10, 2)
   totalAmount     Decimal  @map("total_amount") @db.Decimal(10, 2)
 
@@ -504,3 +554,36 @@ model ShiftLineItem {
   @@index([businessId])
   @@map("shift_line_items")
 }
+
+// -----------------------------------------------------------------------------
+// Module 5: InvoiceSequence (race-safe numbering, spec 2.3.2)
+// -----------------------------------------------------------------------------
+model InvoiceSequence {
+  id         String   @id @default(uuid())
+  businessId String   @map("business_id")
+  year       Int
+  lastNumber Int      @default(0) @map("last_number")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, year])
+  @@map("invoice_sequences")
+}
+
+// -----------------------------------------------------------------------------
+// Module 5: StripeEvent (webhook idempotency, spec 2.3.3)
+// -----------------------------------------------------------------------------
+model StripeEvent {
+  id          String   @id @default(uuid())
+  eventId     String   @unique @map("event_id")
+  type        String
+  businessId  String?  @map("business_id")
+  processedAt DateTime @default(now()) @map("processed_at")
+  payload     Json?
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+
+  @@map("stripe_events")
+}
+

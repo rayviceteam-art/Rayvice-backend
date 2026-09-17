@@ -33,6 +33,24 @@ export async function createClient(input: CreateClientInput, ctx: ClientContext)
   await assertCanMutate(businessId);
   await checkTrialResourceLimit(businessId, "clients");
 
+  // --- Module 5 additive check (spec 2.8): Starter plan is capped at 5
+  // active participants. Trial gating above is unchanged; Pro is unlimited. ---
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: { planTier: true },
+  });
+  if (business?.planTier === "STARTER") {
+    const activeCount = await prisma.client.count({
+      where: { businessId, deletedAt: null, isActive: true },
+    });
+    if (activeCount >= 5) {
+      throw ApiError.forbidden(
+        "Starter plan is limited to 5 active participants. Upgrade to Pro to add more participants.",
+        "STARTER_CLIENT_LIMIT_REACHED"
+      );
+    }
+  }
+
   if (input.defaultSupportItemCode) {
     const supportItem = await prisma.ndisSupportItem.findUnique({
       where: { itemNumber: input.defaultSupportItemCode },

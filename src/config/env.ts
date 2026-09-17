@@ -54,6 +54,14 @@ const envSchema = z.object({
   INVITE_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
   SUPER_ADMIN_EMAILS: z.string().optional().default('rayviceofficial@gmail.com'),
+
+  // --- Module 5: Stripe billing (2.15). Optional: the server boots without
+  // them and only /billing/* returns 503 BILLING_UNAVAILABLE. ---
+  STRIPE_SECRET_KEY: z.string().optional().default(''),
+  STRIPE_WEBHOOK_SECRET: z.string().optional().default(''),
+  STRIPE_PRICE_BASIC_AUD: z.string().optional().default(''),
+  STRIPE_PRICE_PRO_AUD: z.string().optional().default(''),
+  INVOICE_DUE_DAYS: z.coerce.number().int().positive().default(14),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -68,3 +76,8 @@ if (!parsed.success) {
 export const env = parsed.data;
 export const isProduction = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';
+
+/** True when Stripe keys are configured; billing routes degrade gracefully otherwise (2.0 rule 12). */
+export const isBillingConfigured = (): boolean =>
+  Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET);
+
