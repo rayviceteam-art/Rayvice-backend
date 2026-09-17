@@ -26,4 +26,4 @@ Integration of Module 5 (NDIS Tax Invoicing & Stripe Subscription Billing) into 
   - `npm run lint` passed (0 errors)
   - `npm test` passed (127/127 tests passed)
   - `npm run build` passed (clean build)
-- [ ] **Step 9: Git Commit & Push** (`git commit`, `git push origin main`)
+- [x] **Step 9: Git Commit & Push** (`git commit`, `git push origin main`)
