@@ -102,7 +102,10 @@ export async function createCheckoutSession(plan: 'STARTER' | 'PRO', ctx: Billin
   const business = await prisma.business.findUnique({ where: { id: ctx.businessId } });
   if (!business) throw ApiError.notFound('Business not found.');
 
-  if (business.subscriptionStatus === 'active' || business.subscriptionStatus === 'trialing') {
+  if (
+    (business.subscriptionStatus === 'active' || business.subscriptionStatus === 'trialing') &&
+    business.planTier === plan
+  ) {
     throw ApiError.conflict('This business already has an active subscription.', 'ALREADY_SUBSCRIBED');
   }
 
@@ -200,6 +203,10 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
           if (!planTier) {
             logger.warn('Unknown Stripe price id on checkout.session.completed; plan left unchanged.', { priceId });
           } else {
+            const previous = await prisma.business.findUnique({
+              where: { id: businessId },
+              select: { stripeSubscriptionId: true },
+            });
             await prisma.business.update({
               where: { id: businessId },
               data: {
@@ -212,6 +219,19 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
                 planStartedAt: new Date(),
               },
             });
+            // Upgrade/downgrade via a new checkout leaves the previous Stripe
+            // subscription active — cancel it so the customer is not billed twice.
+            if (previous?.stripeSubscriptionId && previous.stripeSubscriptionId !== subscription.id) {
+              try {
+                await requireStripe().subscriptions.cancel(previous.stripeSubscriptionId);
+              } catch (cancelErr) {
+                logger.warn('Failed to cancel previous Stripe subscription after plan change.', {
+                  businessId,
+                  previousSubscriptionId: previous.stripeSubscriptionId,
+                  err: cancelErr,
+                });
+              }
+            }
             await recordAuditEvent({
               action: 'SUBSCRIPTION_ACTIVATED',
               businessId,
