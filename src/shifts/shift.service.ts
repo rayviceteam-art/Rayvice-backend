@@ -139,10 +139,13 @@ export async function createShift(ctx: ActorContext, body: CreateShiftBody, idem
     }
   }
 
-  await checkTrialResourceLimit(ctx.businessId, 'shifts');
-
-  const business = await getBusinessOrThrow(ctx.businessId);
-  const client = await getActiveClientOrThrow(body.clientId, ctx.businessId);
+  // These three loads are independent — run them in parallel to save
+  // 2 sequential DB round trips on every shift save.
+  const [business, client] = await Promise.all([
+    getBusinessOrThrow(ctx.businessId),
+    getActiveClientOrThrow(body.clientId, ctx.businessId),
+    checkTrialResourceLimit(ctx.businessId, 'shifts'),
+  ]).then(([b, c]) => [b, c] as const);
 
   assertShiftDateInWindow(body.shiftDate, business.timezone);
 

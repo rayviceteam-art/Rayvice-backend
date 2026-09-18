@@ -48,9 +48,10 @@ export async function getDashboardSummary(ctx: ActorContext) {
   let activeParticipants: number = 0;
   let recentShifts: any[] = [];
   let budgetClients: any[] = [];
+  let trialShiftsUsed: number = 0;
 
   try {
-    [thisWeekAgg, lastWeekAgg, uninvoicedAgg, activeParticipants, recentShifts, budgetClients] = await Promise.all([
+    [thisWeekAgg, lastWeekAgg, uninvoicedAgg, activeParticipants, recentShifts, budgetClients, trialShiftsUsed] = await Promise.all([
       prisma.shift.aggregate({
         where: thisWeekShiftWhere,
         _sum: { totalAmount: true },
@@ -75,6 +76,10 @@ export async function getDashboardSummary(ctx: ActorContext) {
       prisma.client.findMany({
         where: { businessId: ctx.businessId, isActive: true, deletedAt: null, allocatedBudgetTotal: { not: null } },
       }),
+      // Trial quota count rides the same batch — saves a sequential round trip.
+      business.planTier === 'TRIAL'
+        ? prisma.shift.count({ where: { businessId: ctx.businessId, status: { not: 'CANCELLED' } } })
+        : Promise.resolve(0),
     ]);
   } catch (err) {
     logger.error('Dashboard batch query failed', { businessId: ctx.businessId, error: err instanceof Error ? err.message : err });
@@ -129,7 +134,7 @@ export async function getDashboardSummary(ctx: ActorContext) {
   } | null = null;
 
   if (business.planTier === 'TRIAL') {
-    const shiftsUsed = await prisma.shift.count({ where: { businessId: ctx.businessId, status: { not: 'CANCELLED' } } });
+    const shiftsUsed = trialShiftsUsed;
     const trialEndsAt = business.trialEndsAt
       ? DateTime.fromJSDate(business.trialEndsAt).setZone(tz)
       : null;
