@@ -506,7 +506,20 @@ export async function getCurrentUserProfile(userId: string) {
     select: {
       ...userPublicSelect,
       business: {
-        select: { id: true, name: true, email: true, phone: true, industry: true, status: true, trialEndsAt: true, createdAt: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          industry: true,
+          status: true,
+          planTier: true,
+          subscriptionStatus: true,
+          stripeSubscriptionId: true,
+          timezone: true,
+          trialEndsAt: true,
+          createdAt: true,
+        },
       },
     },
   });

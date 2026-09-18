@@ -53,6 +53,9 @@ const businessProfileSelect = {
   state: true,
   postcode: true,
   status: true,
+  planTier: true,
+  subscriptionStatus: true,
+  stripeSubscriptionId: true,
   // Module 4 — timezone is stored from state (§5.2); the shift UI needs it
   // for rate-tier decisions without a second round-trip.
   timezone: true,

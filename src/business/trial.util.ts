@@ -1,5 +1,5 @@
 import { env } from '../config/env';
-import { BusinessStatus } from '@prisma/client';
+import { BusinessStatus, PlanTier } from '@prisma/client';
 import { ApiError } from '../utils/ApiError';
 import { prisma } from '../config/database';
 
@@ -40,7 +40,19 @@ export function computeTrialEndDate(from: Date = new Date()): Date {
 export function deriveEffectiveBusinessStatus(business: {
   status: BusinessStatus;
   trialEndsAt: Date;
+  planTier?: PlanTier | string | null;
+  subscriptionStatus?: string | null;
 }): BusinessStatus {
+  if (
+    business.status === 'ACTIVE' ||
+    business.subscriptionStatus === 'active' ||
+    business.subscriptionStatus === 'trialing' ||
+    business.planTier === 'STARTER' ||
+    business.planTier === 'PRO'
+  ) {
+    return 'ACTIVE';
+  }
+
   if (business.status === 'TRIALING' && business.trialEndsAt.getTime() <= Date.now()) {
     return 'READ_ONLY';
   }
@@ -50,12 +62,17 @@ export function deriveEffectiveBusinessStatus(business: {
 /**
  * Computes human-readable trial information and days remaining.
  */
-export function getTrialDetails(business: { status: BusinessStatus; trialEndsAt: Date }) {
+export function getTrialDetails(business: {
+  status: BusinessStatus;
+  trialEndsAt: Date;
+  planTier?: PlanTier | string | null;
+  subscriptionStatus?: string | null;
+}) {
   const effectiveStatus = deriveEffectiveBusinessStatus(business);
   const now = Date.now();
   const msRemaining = Math.max(0, business.trialEndsAt.getTime() - now);
   const daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
-  const isExpired = business.status === 'TRIALING' && msRemaining === 0;
+  const isExpired = effectiveStatus === 'READ_ONLY';
 
   return {
     status: business.status,
@@ -74,7 +91,7 @@ export function getTrialDetails(business: { status: BusinessStatus; trialEndsAt:
 export async function assertCanMutate(businessId: string): Promise<void> {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
-    select: { status: true, trialEndsAt: true },
+    select: { status: true, trialEndsAt: true, planTier: true, subscriptionStatus: true },
   });
 
   if (!business) {
@@ -104,7 +121,7 @@ export async function checkTrialResourceLimit(
 ): Promise<void> {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
-    select: { status: true, trialEndsAt: true },
+    select: { status: true, trialEndsAt: true, planTier: true, subscriptionStatus: true },
   });
 
   if (!business) {

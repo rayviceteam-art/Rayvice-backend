@@ -30,8 +30,42 @@ const TRIAL_LIMITS_VIEW = {
 };
 
 export async function getBillingStatus(ctx: BillingContext) {
-  const business = await prisma.business.findUnique({ where: { id: ctx.businessId } });
+  let business = await prisma.business.findUnique({ where: { id: ctx.businessId } });
   if (!business) throw ApiError.notFound('Business not found.');
+
+  // Auto-sync with Stripe when customer ID exists and billing is active
+  if (business.stripeCustomerId && isBillingConfigured()) {
+    try {
+      const stripe = getStripeClient();
+      if (stripe) {
+        const subscriptions = await stripe.subscriptions.list({
+          customer: business.stripeCustomerId,
+          status: 'active',
+          limit: 1,
+        });
+        if (subscriptions.data.length > 0) {
+          const sub = subscriptions.data[0];
+          const priceId = sub.items.data[0]?.price.id;
+          const mappedTier = priceId ? mapPriceIdToPlanTier(priceId) : null;
+          if (mappedTier || business.status !== 'ACTIVE' || business.subscriptionStatus !== 'active') {
+            business = await prisma.business.update({
+              where: { id: business.id },
+              data: {
+                status: 'ACTIVE',
+                ...(mappedTier ? { planTier: mappedTier } : {}),
+                stripeSubscriptionId: sub.id,
+                subscriptionStatus: sub.status,
+                currentPeriodEnd: new Date(sub.current_period_end * 1000),
+                cancelAtPeriodEnd: sub.cancel_at_period_end,
+              },
+            });
+          }
+        }
+      }
+    } catch (syncErr) {
+      logger.warn('Failed to auto-sync Stripe subscription in getBillingStatus', { err: syncErr });
+    }
+  }
 
   const tz = business.timezone || 'Australia/Sydney';
   const now = DateTime.now().setZone(tz);
@@ -92,7 +126,7 @@ export async function createCheckoutSession(plan: 'STARTER' | 'PRO', ctx: Billin
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: `${env.CLIENT_URL}/settings/billing?checkout=success`,
     cancel_url: `${env.CLIENT_URL}/settings/billing?checkout=cancelled`,
-    metadata: { businessId: business.id },
+    metadata: { businessId: business.id, plan },
   });
 
   await recordAuditEvent({
@@ -150,10 +184,18 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
         businessId = (session.metadata?.businessId as string) ?? null;
+        if (!businessId && session.customer) {
+          const biz = await prisma.business.findFirst({ where: { stripeCustomerId: session.customer as string } });
+          businessId = biz?.id ?? null;
+        }
         if (businessId && session.subscription) {
-          const subscription = await requireStripe().subscriptions.retrieve(session.subscription as string);
+          const subId = typeof session.subscription === 'string' ? session.subscription : (session.subscription as any).id;
+          const subscription = await requireStripe().subscriptions.retrieve(subId);
           const priceId = subscription.items.data[0]?.price.id;
-          const planTier = priceId ? mapPriceIdToPlanTier(priceId) : null;
+          let planTier = priceId ? mapPriceIdToPlanTier(priceId) : null;
+          if (!planTier && session.metadata?.plan) {
+            planTier = (session.metadata.plan === 'PRO' || session.metadata.plan === 'STARTER') ? session.metadata.plan : null;
+          }
 
           if (!planTier) {
             logger.warn('Unknown Stripe price id on checkout.session.completed; plan left unchanged.', { priceId });
@@ -161,6 +203,7 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
             await prisma.business.update({
               where: { id: businessId },
               data: {
+                status: 'ACTIVE',
                 planTier,
                 stripeCustomerId: subscription.customer as string,
                 stripeSubscriptionId: subscription.id,
@@ -179,17 +222,29 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
         break;
       }
 
+      case 'customer.subscription.created':
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
-        const business = await prisma.business.findFirst({ where: { stripeSubscriptionId: subscription.id } });
+        const business = await prisma.business.findFirst({
+          where: {
+            OR: [
+              { stripeSubscriptionId: subscription.id },
+              { stripeCustomerId: subscription.customer as string },
+            ],
+          },
+        });
         if (business) {
           businessId = business.id;
           const priceId = subscription.items.data[0]?.price.id;
           const mappedTier = priceId ? mapPriceIdToPlanTier(priceId) : null;
+          const isActive = subscription.status === 'active' || subscription.status === 'trialing';
 
           await prisma.business.update({
             where: { id: business.id },
             data: {
+              ...(isActive ? { status: 'ACTIVE' } : {}),
+              stripeSubscriptionId: subscription.id,
+              stripeCustomerId: subscription.customer as string,
               subscriptionStatus: subscription.status,
               currentPeriodEnd: new Date(subscription.current_period_end * 1000),
               cancelAtPeriodEnd: subscription.cancel_at_period_end,
@@ -197,7 +252,7 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
             },
           });
           await recordAuditEvent({
-            action: 'SUBSCRIPTION_UPDATED',
+            action: event.type === 'customer.subscription.created' ? 'SUBSCRIPTION_ACTIVATED' : 'SUBSCRIPTION_UPDATED',
             businessId: business.id,
             metadata: { planTier: mappedTier ?? business.planTier, subscriptionId: subscription.id, status: subscription.status, currentPeriodEnd: subscription.current_period_end },
           });
@@ -205,14 +260,59 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
         break;
       }
 
+      case 'invoice.paid': {
+        const stripeInvoice = event.data.object as Stripe.Invoice;
+        const subId = typeof stripeInvoice.subscription === 'string' ? stripeInvoice.subscription : (stripeInvoice.subscription as any)?.id;
+        const customerId = stripeInvoice.customer as string | null;
+        if (subId || customerId) {
+          const business = await prisma.business.findFirst({
+            where: {
+              OR: [
+                ...(subId ? [{ stripeSubscriptionId: subId }] : []),
+                ...(customerId ? [{ stripeCustomerId: customerId }] : []),
+              ],
+            },
+          });
+          if (business) {
+            businessId = business.id;
+            await prisma.business.update({
+              where: { id: business.id },
+              data: {
+                status: 'ACTIVE',
+                subscriptionStatus: 'active',
+                ...(subId ? { stripeSubscriptionId: subId } : {}),
+              },
+            });
+            await recordAuditEvent({
+              action: 'INVOICE_PAID',
+              businessId: business.id,
+              metadata: { subscriptionId: subId, invoiceId: stripeInvoice.id },
+            });
+          }
+        }
+        break;
+      }
+
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
-        const business = await prisma.business.findFirst({ where: { stripeSubscriptionId: subscription.id } });
+        const business = await prisma.business.findFirst({
+          where: {
+            OR: [
+              { stripeSubscriptionId: subscription.id },
+              { stripeCustomerId: subscription.customer as string },
+            ],
+          },
+        });
         if (business) {
           businessId = business.id;
           await prisma.business.update({
             where: { id: business.id },
-            data: { subscriptionStatus: 'canceled', planTier: 'TRIAL' },
+            data: {
+              status: 'READ_ONLY',
+              subscriptionStatus: 'canceled',
+              planTier: 'TRIAL',
+              cancelAtPeriodEnd: false,
+            },
           });
           await recordAuditEvent({
             action: 'SUBSCRIPTION_CANCELLED',
@@ -225,9 +325,17 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<{ duplica
 
       case 'invoice.payment_failed': {
         const stripeInvoice = event.data.object as Stripe.Invoice;
-        const subscriptionId = stripeInvoice.subscription as string | null;
-        if (subscriptionId) {
-          const business = await prisma.business.findFirst({ where: { stripeSubscriptionId: subscriptionId } });
+        const subscriptionId = typeof stripeInvoice.subscription === 'string' ? stripeInvoice.subscription : (stripeInvoice.subscription as any)?.id;
+        const customerId = stripeInvoice.customer as string | null;
+        if (subscriptionId || customerId) {
+          const business = await prisma.business.findFirst({
+            where: {
+              OR: [
+                ...(subscriptionId ? [{ stripeSubscriptionId: subscriptionId }] : []),
+                ...(customerId ? [{ stripeCustomerId: customerId }] : []),
+              ],
+            },
+          });
           if (business) {
             businessId = business.id;
             await prisma.business.update({ where: { id: business.id }, data: { subscriptionStatus: 'past_due' } });
