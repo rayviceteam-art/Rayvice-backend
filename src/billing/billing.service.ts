@@ -109,6 +109,10 @@ export async function createCheckoutSession(plan: 'STARTER' | 'PRO', ctx: Billin
     throw ApiError.conflict('This business already has an active subscription.', 'ALREADY_SUBSCRIBED');
   }
 
+  if (business.planTier === 'PRO' && plan === 'STARTER') {
+    throw ApiError.forbidden('Downgrades are not available. Your Pro plan already includes everything in Starter.', 'DOWNGRADE_NOT_ALLOWED');
+  }
+
   const priceId = plan === 'STARTER' ? env.STRIPE_PRICE_BASIC_AUD : env.STRIPE_PRICE_PRO_AUD;
   if (!priceId) throw ApiError.serviceUnavailable('Billing is not configured on this server.', 'BILLING_UNAVAILABLE');
 
@@ -154,6 +158,9 @@ export async function changePlan(plan: 'STARTER' | 'PRO', ctx: BillingContext) {
   }
   if (business.planTier === plan) {
     throw ApiError.conflict('This business already has an active subscription.', 'ALREADY_SUBSCRIBED');
+  }
+  if (business.planTier === 'PRO' && plan === 'STARTER') {
+    throw ApiError.forbidden('Downgrades are not available. Your Pro plan already includes everything in Starter.', 'DOWNGRADE_NOT_ALLOWED');
   }
 
   const priceId = plan === 'STARTER' ? env.STRIPE_PRICE_BASIC_AUD : env.STRIPE_PRICE_PRO_AUD;
