@@ -20,6 +20,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), controller.ha
 router.use(authenticate);
 router.get('/status', authorize('OWNER'), controller.getBillingStatus);
 router.post('/checkout', authorize('OWNER'), validateRequest(checkoutBodySchema), controller.createCheckoutSession);
+router.post('/change-plan', authorize('OWNER'), validateRequest(checkoutBodySchema), controller.changePlan);
 router.post('/portal', authorize('OWNER'), controller.createPortalSession);
 
 export default router;

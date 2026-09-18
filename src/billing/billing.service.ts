@@ -145,6 +145,41 @@ export async function createCheckoutSession(plan: 'STARTER' | 'PRO', ctx: Billin
   return { url: session.url };
 }
 
+export async function changePlan(plan: 'STARTER' | 'PRO', ctx: BillingContext) {
+  const stripe = requireStripe();
+  const business = await prisma.business.findUnique({ where: { id: ctx.businessId } });
+  if (!business) throw ApiError.notFound('Business not found.');
+  if (!business.stripeSubscriptionId) {
+    throw ApiError.conflict('This business has no Stripe subscription yet.', 'NO_SUBSCRIPTION');
+  }
+  if (business.planTier === plan) {
+    throw ApiError.conflict('This business already has an active subscription.', 'ALREADY_SUBSCRIBED');
+  }
+
+  const priceId = plan === 'STARTER' ? env.STRIPE_PRICE_BASIC_AUD : env.STRIPE_PRICE_PRO_AUD;
+  if (!priceId) throw ApiError.serviceUnavailable('Billing is not configured on this server.', 'BILLING_UNAVAILABLE');
+
+  const current = await stripe.subscriptions.retrieve(business.stripeSubscriptionId);
+  const itemId = current.items.data[0]?.id;
+  if (!itemId) throw ApiError.internal('Stripe subscription has no items to update.');
+
+  const updated = await stripe.subscriptions.update(business.stripeSubscriptionId, {
+    items: [{ id: itemId, price: priceId }],
+    proration_behavior: 'create_prorations',
+  });
+
+  await recordAuditEvent({
+    action: 'SUBSCRIPTION_UPDATED',
+    businessId: ctx.businessId,
+    userId: ctx.userId,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+    metadata: { planTier: plan, subscriptionId: updated.id, status: updated.status },
+  });
+
+  return getBillingStatus(ctx);
+}
+
 export async function createPortalSession(ctx: BillingContext): Promise<{ url: string }> {
   const stripe = requireStripe();
   const business = await prisma.business.findUnique({ where: { id: ctx.businessId } });

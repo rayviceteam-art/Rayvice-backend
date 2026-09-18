@@ -23,6 +23,12 @@ export const createCheckoutSession = asyncHandler(async (req, res) => {
   sendSuccess(res, 200, 'Checkout session created.', result);
 });
 
+export const changePlan = asyncHandler(async (req, res) => {
+  const { plan } = req.body as { plan: 'STARTER' | 'PRO' };
+  const result = await billingService.changePlan(plan, ctxFrom(req));
+  sendSuccess(res, 200, 'Subscription plan changed.', result);
+});
+
 export const createPortalSession = asyncHandler(async (req, res) => {
   const result = await billingService.createPortalSession(ctxFrom(req));
   sendSuccess(res, 200, 'Billing portal session created.', result);
